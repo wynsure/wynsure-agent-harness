@@ -36,8 +36,9 @@ Three ideas flow from this and never change:
   produces the same behavior every time it is loaded.
 - **Observation, not truth.** Some live objects expose a `status` (e.g. an MCP
   connection's state, the presets that were merged in). A `status` is produced
-  by the system for inspection; it is never what drives behavior. The only
-  runtime source of truth is the **thread** (see below).
+  by the system for inspection; it is never what drives behavior. The runtime
+  source of truth is the session's **Tree** (see below): the thread, the
+  resource state cells, the posture and token usage all live there.
 
 ## Manifest → Object: two forms, one seam
 
@@ -161,22 +162,31 @@ The runtime has three layers, each with one clear job.
 Execution of a tool call is either **direct** (the resource returns a result,
 wrapped immediately into feedback) or **delegated** (the resource describes an
 *activity* handed to an external environment, which streams progress and then a
-terminal status). User interactions (`interact__*`) are a delegated activity
-under the standard `user-board` environment that every host must register. This
-is what makes the same agent drivable from a terminal TUI, an HTTP server, or a
-batch smoke test without changes to the blueprint. See
+terminal status). User-facing tools (`interact__*`) are one instance of this:
+the harness-shipped resource `InteractSurface` publishes the tools; each kind
+declares whether it backs its response with an activity (`pinned = true` →
+delegates to the `user-board` environment, item stays pinned until resolved) or
+delivers immediately (`pinned = false`, fire-and-forget — e.g. `notify`). The
+`user-board` environment is also shipped, as a passive acceptor the host
+registers on the session. This is what makes the same agent drivable from a
+terminal TUI, an HTTP server, or a batch smoke test without changes to the
+blueprint — and what keeps the harness agnostic to the nature of any other
+environment. See
 [`activities.spec.md`](../../../docs/activities.spec.md).
 
-## The thread is the single source of truth
+## The Tree is the single source of truth
 
-The most important invariant: **the thread is the source of truth; everything
-else is a cache derived from it.** Every meaningful event — the active posture,
-attached skills, spawned sub-agents, in-flight activities, the conversation
-itself — is audited as an append-only stream of **fragments**. The current
-state can always be reconstructed by replaying that stream. No parallel state
-field in the session is authoritative; `status` on objects is observation, and
-the volatile `Memory` store is, by design, never replayed.
+The most important invariant: **the session's Tree is the source of truth; the
+thread is one leaf within it.** Every meaningful runtime artifact — the
+conversation (a `thread` leaf), the resource state (a `state` leaf whose cells
+are keyed by resource name), the user-facing projection (an `interact` leaf),
+the active posture and token usage (state cells) — lives as serializable cells
+addressed by path. A session therefore snapshots and restores as a whole: the
+Tree is the unit of persistence, resources are re-instantiated from their
+manifests, and transient handles (MCP clients, model caches) reconnect lazily.
 
-This is what makes an agent inspectable, debuggable and replayable: if you can
-see the fragments, you can understand exactly what happened and why, and the
-behavior follows deterministically from the data.
+The agent thread remains an append-only leaf, so an agent is still inspectable
+and replayable from its fragments. But it no longer stands alone: the `status`
+on objects, the volatile memory and the intrinsic context state are no longer
+derived caches — they are first-class, replayable state cells. See
+[`state-tree.spec.md`](../../../docs/state-tree.spec.md).

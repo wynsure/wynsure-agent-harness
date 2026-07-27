@@ -8,19 +8,23 @@ import { describe, it, assert, eq } from "./runner.ts"
 import {
    ScriptedCompletionService,
    DirectEchoObject,
+   CaptureEnvironment,
    stampDefaultModel,
    injectStubModel,
    waitForSettled,
    threadTypes,
 } from "./harness.ts"
-import { createBlueprintFrom, type Blueprint } from "../src/blueprint.ts"
-import { AgentSession } from "../src/session.ts"
-import { PostureObject, SkillObject, AgentObject } from "../src/resources/index.ts"
-import { UserBoardEnvironment } from "../src/activity.ts"
-import { createToolUse, createAgentMessage, type InstructionFragment } from "../src/fragment.ts"
+import { createBlueprintFrom, type Blueprint } from "../src/blueprint/blueprint.ts"
+import { AgentSession } from "../src/runtime/session.ts"
+import { PostureObject, SkillObject, AgentObject } from "../src/blueprint/resources/index.ts"
+import { createToolUse, createAgentMessage, type InstructionFragment } from "../src/state/fragment.ts"
 
-// Ensure every resource loader (agent/posture/mcp/preset/skill/model) is registered.
-import "../src/resources"
+// Ensure every core resource loader (agent/posture/preset/skill) is registered.
+import "../src/blueprint/resources"
+// Ensure every pluggable resource loader (memory/interact-surface/openai-
+// completion/mcp-stdio) is registered too — the harness.ts stub model extends
+// BaseModelObject from extensions/openai-completion.
+import "../src/extensions"
 
 /** Async blueprint→session builder (resource factories are async). */
 async function buildFromManifestsAsync(
@@ -34,7 +38,7 @@ async function buildFromManifestsAsync(
     const completion = new ScriptedCompletionService(turns)
     injectStubModel(blueprint, completion)
     const session = new AgentSession(blueprint)
-    session.registerEnvironment(new UserBoardEnvironment())
+    session.registerEnvironment(new CaptureEnvironment("user-board"))
     return { session, blueprint, completion }
 }
 
@@ -61,7 +65,7 @@ describe("preset resource", () => {
       eq(outcome, "prompt", "session settles on prompt after init")
 
       const instructions = session.context.thread.fragments.filter(
-         (f): f is InstructionFragment => f.type === "Instruction",
+         (f): f is InstructionFragment => f.kind === "Instruction",
       )
       const sources = instructions.map((f) => f.source)
       assert(sources.includes("a"), "persona instruction emitted")
@@ -134,101 +138,83 @@ describe("preset resource", () => {
       )
     })
 
-    it("harness/conversational preset exposes the five interact tools via extends", async () => {
+    it("no builtin catalogue: extends of an undeclared preset fails at load", async () => {
+       // The harness ships no presets. Referencing one that is not declared in
+       // the blueprint (the former `harness/conversational`) now fails fast.
+       let threw: unknown
+       try {
+          await buildFromManifestsAsync([
+             {
+                apiVersion: "agent/v1",
+                kind: "Agent",
+                metadata: { name: "a" },
+                spec: { extends: ["harness/conversational"], instruction: { content: "You are A." } },
+             },
+          ])
+       } catch (err) {
+          threw = err
+       }
+       assert(!!threw, "extends of an undeclared preset throws at load")
+    })
+
+    it("no builtin catalogue: toolset referencing an undeclared resource fails at resolve time", async () => {
+       // There is no virtual `harness` resource anymore. A toolset resolves
+       // lazily (when the posture's tooling is collected); an undeclared
+       // resource throws at that point.
        const { blueprint } = await buildFromManifestsAsync([
           {
              apiVersion: "agent/v1",
              kind: "Agent",
              metadata: { name: "a" },
-             spec: { extends: ["harness/conversational"], instruction: { content: "You are A." } },
+             spec: { instruction: { content: "You are A." } },
           },
-      ])
-      const agent = blueprint.getResource("a") as AgentObject
-      const names = agent.getTools().map((g) => g.name)
-      for (const t of [
-         "interact__ask",
-         "interact__confirm",
-         "interact__todo",
-         "interact__notify",
-         "interact__message",
-      ]) {
-         assert(names.includes(t), `harness/conversational exposes ${t}`)
-      }
-   })
+          {
+             apiVersion: "agent/v1",
+             kind: "Posture",
+             metadata: { name: "p" },
+             spec: {
+                instruction: { content: "posture body" },
+                tooling: [{ type: "toolset", tools: "harness/interact__ask" }],
+             },
+          },
+       ])
+       const posture = blueprint.getResource("p") as PostureObject
+       let threw: unknown
+       try {
+          posture.getActiveTooling()
+       } catch (err) {
+          threw = err
+       }
+       assert(!!threw, "referencing an undeclared resource throws at resolve time")
+       assert(
+          (threw as Error).message.includes("unknown resource"),
+          "error message names the unknown resource",
+       )
+    })
 
-   it("toolset tools harness/<tool> resolves to the harness-published tool", async () => {
-      const { blueprint } = await buildFromManifestsAsync([
-         {
-            apiVersion: "agent/v1",
-            kind: "Agent",
-            metadata: { name: "a" },
-            spec: { instruction: { content: "You are A." } },
-         },
-         {
-            apiVersion: "agent/v1",
-            kind: "Posture",
-            metadata: { name: "p" },
-            spec: {
-               instruction: { content: "posture body" },
-               tooling: [{ type: "toolset", tools: "harness/interact__ask" }],
-            },
-         },
-      ])
-      const posture = blueprint.getResource("p") as PostureObject
-      const guides = posture.getActiveTooling().map((g) => g.name)
-      assert(guides.includes("interact__ask"), "builtin tool resolved via harness tools")
-   })
-
-   it("toolset tools harness/<unknown> fails fast at load", async () => {
-      let threw: unknown
-      try {
-         await buildFromManifestsAsync([
-            {
-               apiVersion: "agent/v1",
-               kind: "Agent",
-               metadata: { name: "a" },
-               spec: { instruction: { content: "You are A." } },
-            },
-            {
-               apiVersion: "agent/v1",
-               kind: "Posture",
-               metadata: { name: "p" },
-               spec: {
-                  instruction: { content: "posture body" },
-                  tooling: [{ type: "toolset", tools: "harness/interact__no_such_thing" }],
-               },
-            },
-         ])
-      } catch (err) {
-         threw = err
-      }
-      assert(!!threw, "unknown builtin tool throws at load")
-      assert(
-         (threw as Error).message.includes("Unknown builtin tool"),
-         "error message names the failure",
-      )
-   })
-
-   it("user Preset under harness/ namespace is rejected", async () => {
-      let threw: unknown
-      try {
-         await buildFromManifestsAsync([
-            {
-               apiVersion: "agent/v1",
-               kind: "Preset",
-               metadata: { name: "harness/impostor" },
-               spec: {},
-            },
-         ])
-      } catch (err) {
-         threw = err
-      }
-      assert(!!threw, "reserved namespace collision throws")
-      assert(
-         (threw as Error).message.includes("Reserved namespace"),
-         "error message names the reserved namespace",
-      )
-   })
+    it("no reserved namespace: a Preset named harness/* loads like any other", async () => {
+       // The reserved harness/ namespace guard is gone with the builtin
+       // catalogue. A user Preset under that prefix now loads normally.
+       const { blueprint } = await buildFromManifestsAsync([
+          {
+             apiVersion: "agent/v1",
+             kind: "Preset",
+             metadata: { name: "harness/impostor" },
+             spec: {},
+          },
+          {
+             apiVersion: "agent/v1",
+             kind: "Agent",
+             metadata: { name: "a" },
+             spec: { extends: ["harness/impostor"], instruction: { content: "You are A." } },
+          },
+       ])
+       const agent = blueprint.getResource("a") as AgentObject
+       assert(
+          (agent as any).status.mergedFrom.includes("harness/impostor"),
+          "preset under the former reserved prefix is merged normally",
+       )
+    })
 })
 
 describe("skill resource", () => {
@@ -273,7 +259,7 @@ describe("skill resource", () => {
 
       const types = threadTypes(session)
       assert(types.includes("SkillAttach"), "SkillAttach emitted on activation")
-      const attach = session.context.thread.fragments.find((f) => f.type === "SkillAttach") as any
+      const attach = session.context.thread.fragments.find((f) => f.kind === "SkillAttach") as any
       eq(attach.name, "risk", "attached skill name")
       assert(
          attach.content.includes("Assess the risk."),
@@ -353,13 +339,13 @@ describe("skill resource", () => {
        // No harness-rooted ToolUse or ToolFeedback was emitted for the hook.
        const hookToolUses = session.context.thread.fragments.filter(
           (f) =>
-             f.type === "ToolUse" &&
+             f.kind === "ToolUse" &&
              (f as any).activityId === session.context.harnessActivityId,
        )
        eq(hookToolUses.length, 0, "no ToolUse fragment for the hook invocation")
        const harnessFeedbacks = session.context.thread.fragments.filter(
           (f) =>
-             f.type === "ToolFeedback" &&
+             f.kind === "ToolFeedback" &&
              (f as any).activityId === session.context.harnessActivityId,
        )
        eq(harnessFeedbacks.length, 0, "no ToolFeedback for the hook invocation")
@@ -455,7 +441,7 @@ describe("posture route dispatch", () => {
 
       // The route call produced a ToolFeedback (not a Tool not found error).
       const feedbacks = session.context.thread.fragments.filter(
-         (f) => f.type === "ToolFeedback",
+         (f) => f.kind === "ToolFeedback",
       ) as any[]
       const routeFeedback = feedbacks.find((fb) => fb.toolUseId === "u1")
       assert(!!routeFeedback, "route tool call produced feedback")
@@ -464,7 +450,7 @@ describe("posture route dispatch", () => {
       // The target posture is now active: a PostureUse fragment was emitted
       // for it and currentPosture reflects the transition.
       const postureUses = session.context.thread.fragments.filter(
-         (f) => f.type === "PostureUse",
+         (f) => f.kind === "PostureUse",
       ) as any[]
       const targetUse = postureUses.find((p) => p.name === "greet")
       assert(!!targetUse, "PostureUse emitted for target posture")
@@ -534,7 +520,7 @@ describe("agent route dispatch (permanent)", () => {
 
       // The route call produced a non-error ToolFeedback.
       const feedbacks = session.context.thread.fragments.filter(
-         (f) => f.type === "ToolFeedback",
+         (f) => f.kind === "ToolFeedback",
       ) as any[]
       const routeFeedback = feedbacks.find((fb) => fb.toolUseId === "u1")
       assert(!!routeFeedback, "route tool call produced feedback")
@@ -641,33 +627,39 @@ describe("toolset tools selection", () => {
        )
    })
 
-   it("tools accepts a list of patterns and aggregates them in order", async () => {
-      const { blueprint } = await buildFromManifestsAsync([
-         {
-            apiVersion: "agent/v1",
-            kind: "Agent",
-            metadata: { name: "a" },
-            spec: { instruction: { content: "You are A." } },
-         },
-         {
-            apiVersion: "agent/v1",
-            kind: "Posture",
-            metadata: { name: "p" },
-            spec: {
-               instruction: { content: "posture body" },
-               tooling: [
-                  {
-                     type: "toolset",
-                     tools: ["echo/*", "harness/interact__ask"],
-                  },
-               ],
-            },
-         },
-      ], [], (bp) => bp.resources.push(new DirectEchoObject()))
-      const posture = blueprint.getResource("p") as PostureObject
-      const names = posture.getActiveTooling().map((g) => g.name).sort()
-      eq(names.join(","), "echo__say,interact__ask", "list form aggregates all sources in declaration order")
-   })
+    it("tools accepts a list of patterns and aggregates them in order", async () => {
+       const { blueprint } = await buildFromManifestsAsync([
+          {
+             apiVersion: "agent/v1",
+             kind: "Agent",
+             metadata: { name: "a" },
+             spec: { instruction: { content: "You are A." } },
+          },
+          {
+             apiVersion: "agent/v1",
+             kind: "Memory",
+             metadata: { name: "memory" },
+             spec: {},
+          },
+          {
+             apiVersion: "agent/v1",
+             kind: "Posture",
+             metadata: { name: "p" },
+             spec: {
+                instruction: { content: "posture body" },
+                tooling: [
+                   {
+                      type: "toolset",
+                      tools: ["echo/*", "memory/get"],
+                   },
+                ],
+             },
+          },
+       ], [], (bp) => bp.resources.push(new DirectEchoObject()))
+       const posture = blueprint.getResource("p") as PostureObject
+       const names = posture.getActiveTooling().map((g) => g.name).sort()
+       eq(names.join(","), "echo__say,memory__get", "list form aggregates all sources in declaration order")
+    })
 
    it("tools entry rejects combining `tools` and `selector`", async () => {
       let threw: unknown
@@ -736,7 +728,7 @@ describe("memory resource", () => {
 
       // The set call returns { ok: true }.
       const setFeedback = session.context.thread.fragments.find(
-         (f) => f.type === "ToolFeedback" && (f as any).toolUseId === "u1",
+         (f) => f.kind === "ToolFeedback" && (f as any).toolUseId === "u1",
       ) as any
       assert(!!setFeedback, "set produced a ToolFeedback")
       assert(setFeedback.isError !== true, "set did not error")
@@ -744,13 +736,15 @@ describe("memory resource", () => {
 
       // The get call returns the stored value.
       const getFeedback = session.context.thread.fragments.find(
-         (f) => f.type === "ToolFeedback" && (f as any).toolUseId === "u2",
+         (f) => f.kind === "ToolFeedback" && (f as any).toolUseId === "u2",
       ) as any
       assert(!!getFeedback, "get produced a ToolFeedback")
       eq(getFeedback.result.value.v, 42, "get returns the stored value")
 
       // And the store itself reflects the write.
-      eq((session.context.memory.get("k") as { v: number } | undefined)?.v, 42, "store reflects the write")
+      const convo = session.blueprint.getResource("convo")!
+      const cell = session.context.getState(convo)
+      eq((cell?.payload as Record<string, { v: number }> | undefined)?.k?.v, 42, "store reflects the write")
    })
 
    it("get on an unknown key returns null (not an error)", async () => {
@@ -780,7 +774,7 @@ describe("memory resource", () => {
       await settled
 
       const feedback = session.context.thread.fragments.find(
-         (f) => f.type === "ToolFeedback" && (f as any).toolUseId === "u1",
+         (f) => f.kind === "ToolFeedback" && (f as any).toolUseId === "u1",
       ) as any
       assert(!!feedback, "get produced a ToolFeedback")
       assert(feedback.isError !== true, "unknown key is not an error")

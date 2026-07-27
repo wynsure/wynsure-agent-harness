@@ -5,7 +5,7 @@ turns whatever is in your fridge into a step-by-step meal. It is small enough
 to read in one sitting, but exercises every idea that matters: a model, an
 agent, two postures with a transition between them, a volatile memory, a
 guardrail, and a hook. We will introspect it with the CLI, then drive it from
-both the terminal TUI and the HTTP webapp.
+the HTTP webapp.
 
 > The field-by-field schema for every resource used below lives in
 > [`resources.md`](./resources.md). For the conceptual model behind these
@@ -31,11 +31,12 @@ command without a path, it offers an interactive picker of those files.
 
 ## Step 1 — a model and an agent that can say hello
 
-Create `pantri.blueprint.yaml` with two resources: a model and the agent. The
-model has an empty `spec` because every field falls back to the `OPENAI_*`
-environment variables. The agent extends the built-in `harness/conversational`
-preset so it gets the five `interact__*` tools (ask, confirm, todo, notify,
-message) and the "hand back to the user at the end of a turn" pattern for free.
+Create `pantri.blueprint.yaml` with three resources: a model, an interaction
+surface, and the agent. The model has an empty `spec` because every field falls
+back to the `OPENAI_*` environment variables. The `InteractSurface` resource is
+shipped by the harness and publishes the `interact__*` tools (ask, confirm, todo,
+notify, message); the agent references it via `tools: user/*` so it can talk to
+a human.
 
 ```yaml
 apiVersion: agent/v1
@@ -44,11 +45,22 @@ metadata: { name: model-default }
 spec: {}
 ---
 apiVersion: agent/v1
+kind: InteractSurface
+metadata: { name: user }
+spec: {}
+---
+apiVersion: agent/v1
 kind: Agent
 metadata: { name: pantri_chef }
 spec:
   model: model-default
-  extends: [harness/conversational]
+  tooling:
+    - type: toolset
+      tools: user/*
+  hooks:
+    on_completion:
+      - type: tooluse
+        tool: interact__prompt
   initial_posture: greet
   instruction:
     content: |
@@ -70,15 +82,16 @@ harness catalogue (the built-in presets and tools you are allowed to reference).
 You should see the agent, its `initial_posture=greet`, and an `all good`
 summary.
 
-Now drive it interactively. Note that the `greet` posture does not exist yet —
-we will add it next; for this first run, omit `initial_posture` if you want to
-see the agent talk without any posture.
+Now drive it on the web with the studio command. Note that the `greet` posture
+does not exist yet — we will add it next; for this first run, omit
+`initial_posture` if you want to see the agent talk without any posture.
 
 ```bash
-agent-blueprint pantri.blueprint.yaml
+agent-blueprint studio --port 3000
 ```
 
-That launches the terminal TUI. Type "hi" and Pantri replies using the model.
+Open `http://localhost:3000`, start a session on Pantri, and type "hi" —
+Pantri replies using the model.
 
 ## Step 2 — two postures and a transition between them
 
@@ -198,7 +211,9 @@ kind: Agent
 metadata: { name: pantri_chef }
 spec:
   model: model-default
-  extends: [harness/conversational]
+  tooling:
+    - type: toolset
+      tools: user/*
   initial_posture: greet
   instruction:
     content: |
@@ -224,15 +239,14 @@ The same blueprint runs unchanged behind an HTTP server with a bundled webapp
 dashboard.
 
 ```bash
-agent-blueprint serve --port 3000
+agent-blueprint studio --port 3000
 ```
 
 Open `http://localhost:3000`. The webapp discovers your `*.blueprint.yaml`
 files, lets you start a session against Pantri, and shows the conversation, the
 context inspector (posture, skills, fragments) and a single bottom input slot
-for both chatting and steering. Because user interactions are routed through
-the standard `user-board` environment, the blueprint needs no changes between
-the terminal and the web.
+for both chatting and steering. Because interactions delegate to the
+`user-board` environment the host registers, the blueprint needs no changes.
 
 ## Step 6 — a closer look with deep introspection
 
@@ -254,6 +268,6 @@ per-resource tool list printed under each connection.
 
 - The complete reference for every field of every kind: [`resources.md`](./resources.md).
 - Generate that reference yourself at any time with `agent-blueprint docs`.
-- The deeper specifications — activities, hooks & guardrails, the serve
+- The deeper specifications — activities, hooks & guardrails, the studio
   protocol — live under the repository `docs/` folder
-  (`activities.spec.md`, `hooks-guardrails.spec.md`, `serve.spec.md`).
+  (`activities.spec.md`, `hooks-guardrails.spec.md`, `studio.spec.md`).

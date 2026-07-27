@@ -8,6 +8,7 @@ import "./activity.test"
 import "./resources.test"
 import "./steering.test"
 import "./hooks-guardrails.test"
+import "./state-tree.test"
 import { runAll } from "./runner.ts"
 
 runAll().catch((err) => {

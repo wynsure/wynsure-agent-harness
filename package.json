@@ -1,6 +1,6 @@
 {
   "name": "@kanop.ai/agent-blueprint-harness",
-  "version": "0.1.3",
+  "version": "0.1.7",
   "description": "Runtime agent harness: blueprints, sessions, fragments, activities",
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
@@ -18,15 +18,21 @@
     "./package.json": "./package.json"
   },
   "files": [
+    "docs",
     "dist",
     "!dist/**/*.map",
     "README.md"
   ],
   "scripts": {
+    "test": "tsx test/run.ts",
     "build": "tsup && node -e \"const fs=require('fs'),s='dist/index.d.ts',d='dist/types.d.ts';if(fs.existsSync(s)){fs.rmSync(d,{force:true});fs.renameSync(s,d)}\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx test/run.ts",
-    "prepack": "npm run build"
+    "typewatch": "tsc -p tsconfig.json --watch --noEmit",
+    "prepack": "npm run build && node scripts/strip-dev-exports.mjs",
+    "postpack": "node scripts/restore-dev-exports.mjs",
+    "version:bump": "npm version patch --no-git-tag-version",
+    "release": "npm run version:bump && npm publish --access public",
+    "pack": "npm run version:bump && npm pack"
   },
   "dependencies": {
     "@azure/identity": "^4.13.1",

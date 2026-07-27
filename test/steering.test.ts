@@ -4,12 +4,12 @@
  * completion in flight), and the busy-rejection (→ HTTP 409 source).
  */
 import { describe, it, assert, eq } from "./runner.ts"
-import { type IThreadCompletionService, type CompletionResult } from "../src/thread.ts"
-import { type Fragment, createAgentMessage } from "../src/fragment.ts"
-import { Blueprint } from "../src/blueprint.ts"
-import { AgentObject, type AgentSpec } from "../src/resources/index.ts"
-import { AgentSession } from "../src/session.ts"
-import { SteeringBusyError } from "../src/steering.ts"
+import { type IThreadCompletionService, type CompletionResult } from "../src/runtime/thread.ts"
+import { type Fragment, createAgentMessage } from "../src/state/fragment.ts"
+import { Blueprint } from "../src/blueprint/blueprint.ts"
+import { AgentObject, type AgentSpec } from "../src/blueprint/resources/index.ts"
+import { AgentSession } from "../src/runtime/session.ts"
+import { SteeringBusyError } from "../src/runtime/steering.ts"
 import {
    ScriptedCompletionService,
    buildSession,
@@ -103,7 +103,7 @@ describe("Steering", () => {
 
       const types = threadTypes(session)
       assert(types.includes("UserMessage"), "steer emitted a UserMessage")
-      const um = session.context.thread.fragments.find((f) => f.type === "UserMessage") as any
+      const um = session.context.thread.fragments.find((f) => f.kind === "UserMessage") as any
       eq(um?.content, "hello there", "UserMessage carries the steering text")
       assert(types.includes("AgentMessage"), "a fresh completion ran after steering")
    })
@@ -121,7 +121,7 @@ describe("Steering", () => {
       await settled2
 
       const instr = session.context.thread.fragments.find(
-         (f) => f.type === "Instruction" && (f as any).source === "steering",
+         (f) => f.kind === "Instruction" && (f as any).source === "steering",
       ) as any
       assert(instr, "Instruction fragment with source=steering was emitted")
       eq(instr.content, "be terse", "Instruction carries the steering text")
@@ -149,7 +149,7 @@ describe("Steering", () => {
       session.steer("go", { interrupt: true })
       await exec
 
-      assert(session.context.thread.fragments.some((f) => f.type === "UserMessage"), "interrupt steer landed")
+      assert(session.context.thread.fragments.some((f) => f.kind === "UserMessage"), "interrupt steer landed")
    })
 
    it("interrupt steering aborts the completion, discards its result, and resumes", async () => {
@@ -168,7 +168,7 @@ describe("Steering", () => {
       const types = threadTypes(session)
       // The aborted completion produced no fragments; only the steer + recovery ran.
       assert(types.includes("UserMessage"), "steer injected a UserMessage after the abort")
-      const um = session.context.thread.fragments.find((f) => f.type === "UserMessage") as any
+      const um = session.context.thread.fragments.find((f) => f.kind === "UserMessage") as any
       eq(um?.content, "redirect", "UserMessage carries the interrupt steering text")
       assert(types.includes("AgentMessage"), "the loop resumed and ran a fresh completion")
       eq((session.context.thread.fragments.at(-1) as any)?.content, "recovered", "last fragment is the recovered agent message")

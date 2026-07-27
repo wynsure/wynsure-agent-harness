@@ -2,7 +2,8 @@
 
 A declarative runtime for LLM agents. Describe an agent — its model, persona,
 states, tools and safety rules — in a single YAML **blueprint**, and the
-harness turns it into inspectable, replayable behavior you can drive from an HTTP server or a batch job without changing the file.
+harness turns it into inspectable, replayable behavior you can drive from an
+HTTP server or a batch job without changing the file.
 
 This package holds the runtime (blueprint loading, sessions, fragments,
 activities).

@@ -9,26 +9,26 @@ import {
    Blueprint,
    type ResourceObject,
    type ToolGuide,
-   type ToolOutcome,
+   type ToolName,
    type GuardrailDecl,
    type HookEntry,
    type HookTrigger,
-} from "../src/blueprint.ts"
-import { AgentObject, AGENT_API_VERSION, type AgentSpec } from "../src/resources/index.ts"
-import { BaseModelObject } from "../src/resources/model-base.ts"
-import { AgentSession } from "../src/session.ts"
+} from "../src/blueprint/blueprint.ts"
+import type { AgentContext } from "../src/runtime/context.ts"
+import { AgentObject, AGENT_API_VERSION, type AgentSpec } from "../src/blueprint/resources/index.ts"
+import { BaseModelObject } from "../src/extensions/openai-completion/model-base.ts"
+import { AgentSession } from "../src/runtime/session.ts"
 import {
    type IThreadCompletionService,
    type CompletionResult,
-} from "../src/thread.ts"
-import type { Fragment } from "../src/fragment.ts"
+} from "../src/runtime/thread.ts"
+import type { Fragment } from "../src/state/fragment.ts"
 import {
    type Activity,
    type ActivityDelivery,
    type ActivityEnvironment,
-   UserBoardEnvironment,
-} from "../src/activity.ts"
-import type { ObjectManifest } from "../src/object-meta.ts"
+} from "../src/state/activity.ts"
+import type { ObjectManifest } from "../src/blueprint/object-meta.ts"
 
 /**
  * Replays a scripted list of completion turns. Each call to complete() pops the
@@ -133,22 +133,82 @@ export class TestWorkerObject implements ResourceObject {
        }
     }
     async applyTool(
-       id: string,
+       toolName: ToolName,
        params: Record<string, unknown>,
-    ): Promise<ToolOutcome | undefined> {
-       const toolName = id.startsWith(`${this.name}__`)
-          ? id.slice(this.name.length + 2)
-          : id
-       if (toolName === "delegate_task") {
-          return {
-             environment: "test-worker",
-             kind: "delegate_task",
-             arguments: params,
-          }
+       context: AgentContext,
+       deliveryId?: string,
+    ): Promise<string | undefined> {
+       const name = toolName.startsWith(`${this.name}__`)
+          ? toolName.slice(this.name.length + 2)
+          : toolName
+       if (name === "delegate_task") {
+          context.delegateActivity(
+             { environment: "test-worker", kind: "delegate_task", arguments: params },
+             deliveryId,
+          )
+          return deliveryId
        }
        return undefined
     }
  }
+
+/**
+ * A synthetic resource that publishes `interact__ask` and delegates it to the
+ * "user-board" environment, embedding the args as the activity payload. This
+ * mirrors the shape a host-provided interaction surface (e.g. the CLI's
+ * InteractSurface kind) would expose: a tool whose applyTool returns an
+ * ActivitySpec toward a named environment. Used to exercise user-board-style
+ * delegation without depending on any builtin catalogue.
+ */
+export class UserAskerObject implements ResourceObject {
+   readonly apiVersion = "test/v1"
+   readonly kind = "UserAsker"
+   readonly metadata = { name: "user" }
+   readonly name = "user"
+   getTools(): ToolGuide[] {
+      return [
+         {
+            name: "interact__ask",
+            intent: "Ask the user a question",
+            input: z.object({ question: z.string() }),
+         },
+      ]
+   }
+   getHooks(_trigger: HookTrigger): HookEntry[] {
+      return []
+   }
+   getGuardrails(): GuardrailDecl[] {
+      return []
+   }
+   toManifest(): ObjectManifest {
+      return {
+         apiVersion: this.apiVersion,
+         kind: this.kind,
+         metadata: this.metadata,
+         spec: {},
+      }
+   }
+    async applyTool(
+       toolName: ToolName,
+       params: Record<string, unknown>,
+       context: AgentContext,
+       deliveryId?: string,
+    ): Promise<string | undefined> {
+       if (toolName === "interact__ask") {
+          context.delegateActivity(
+             {
+                environment: "user-board",
+                kind: "interact__ask",
+                arguments: params,
+                payload: { kind: "ask", question: params.question ?? "" },
+             },
+             deliveryId,
+          )
+          return deliveryId
+       }
+       return undefined
+    }
+}
 
 /**
  * A synthetic resource that resolves a tool synchronously (direct execution
@@ -189,22 +249,31 @@ export class DirectEchoObject implements ResourceObject {
          spec: {},
       }
    }
-   async applyTool(id: string, params: Record<string, unknown>): Promise<ToolOutcome | undefined> {
-      const toolName = id.startsWith(`${this.name}__`) ? id.slice(this.name.length + 2) : id
-      if (toolName === "say") {
-         if (this.failOn !== undefined && params.message === this.failOn) {
-            return { result: { denied: true }, isError: true }
-         }
-         return { result: { echoed: params.message ?? "" } }
-      }
-      return undefined
-   }
+    async applyTool(
+       toolName: ToolName,
+       params: Record<string, unknown>,
+       context: AgentContext,
+       deliveryId?: string,
+    ): Promise<string | undefined> {
+       const name = toolName.startsWith(`${this.name}__`)
+          ? toolName.slice(this.name.length + 2)
+          : toolName
+       if (name === "say") {
+          if (this.failOn !== undefined && params.message === this.failOn) {
+             context.deliver(deliveryId, { denied: true }, true)
+          } else {
+             context.deliver(deliveryId, { echoed: params.message ?? "" })
+          }
+       }
+       return undefined
+    }
 }
 
 /**
  * Captures every activity assigned to it, exposing the deliveries so a test can
  * push progress / resolve / fail out of band. Mirrors how a real environment
- * would drive an ActivityDelivery.
+ * would drive an ActivityDelivery. Generic: the name is configurable so a test
+ * can stand in for any environment ("user-board", "test-worker", …).
  */
 export class CaptureEnvironment implements ActivityEnvironment {
    readonly name: string
@@ -282,13 +351,19 @@ export function buildSession(opts: BuildSessionOptions): {
     return { session, completion }
 }
 
-/** Standard environments for tests: the passive user-board + a capturer. */
+/**
+ * Standard environments for tests: a capturer standing in for "user-board"
+ * (resolved out of band, like a host would) plus the worker capturer. Returns
+ * the user-board capturer so a test can drive its activities.
+ */
 export function registerStandardEnvironments(
    session: AgentSession,
    capturer: CaptureEnvironment,
-): void {
-   session.registerEnvironment(new UserBoardEnvironment())
+): CaptureEnvironment {
+   const userBoard = new CaptureEnvironment("user-board")
+   session.registerEnvironment(userBoard)
    session.registerEnvironment(capturer)
+   return userBoard
 }
 
 /**
@@ -327,5 +402,5 @@ export function waitForSettled(
 
 /** Types of the fragments currently on the root thread, in order. */
 export function threadTypes(session: AgentSession): string[] {
-   return session.context.thread.fragments.map((f) => f.type)
+   return session.context.thread.fragments.map((f) => f.kind)
 }

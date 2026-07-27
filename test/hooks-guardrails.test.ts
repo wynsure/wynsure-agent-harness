@@ -8,22 +8,26 @@ import { describe, it, assert, eq } from "./runner.ts"
 import {
    ScriptedCompletionService,
    DirectEchoObject,
+   CaptureEnvironment,
    stampDefaultModel,
    injectStubModel,
    waitForSettled,
 } from "./harness.ts"
-import { createBlueprintFrom, type Blueprint } from "../src/blueprint.ts"
-import { AgentSession } from "../src/session.ts"
-import { UserBoardEnvironment } from "../src/activity.ts"
+import { createBlueprintFrom, type Blueprint } from "../src/blueprint/blueprint.ts"
+import { AgentSession } from "../src/runtime/session.ts"
 import {
    createToolUse,
    createAgentMessage,
    type ToolUseFragment,
    type ToolFeedbackFragment,
-} from "../src/fragment.ts"
+} from "../src/state/fragment.ts"
 
-// Ensure every resource loader (agent/posture/mcp/preset/skill/model) is registered.
-import "../src/resources"
+// Ensure every core resource loader (agent/posture/preset/skill) is registered.
+import "../src/blueprint/resources"
+// Ensure every pluggable resource loader (memory/interact-surface/openai-
+// completion/mcp-stdio) is registered too — the harness.ts stub model extends
+// BaseModelObject from extensions/openai-completion.
+import "../src/extensions"
 
 async function buildFromManifestsAsync(
    manifests: unknown[],
@@ -36,19 +40,21 @@ async function buildFromManifestsAsync(
     const completion = new ScriptedCompletionService(turns)
     injectStubModel(blueprint, completion)
     const session = new AgentSession(blueprint)
-    session.registerEnvironment(new UserBoardEnvironment())
+    // A passive user-board capturer stands in for a host that resolves
+    // interaction activities out of band.
+    session.registerEnvironment(new CaptureEnvironment("user-board"))
     return { session, blueprint, completion }
 }
 
 function toolFeedbacks(session: AgentSession): ToolFeedbackFragment[] {
    return session.context.thread.fragments.filter(
-      (f) => f.type === "ToolFeedback",
+      (f) => f.kind === "ToolFeedback",
    ) as ToolFeedbackFragment[]
 }
 
 function toolUses(session: AgentSession): ToolUseFragment[] {
    return session.context.thread.fragments.filter(
-      (f) => f.type === "ToolUse",
+      (f) => f.kind === "ToolUse",
    ) as ToolUseFragment[]
 }
 
@@ -151,7 +157,7 @@ describe("hook fire — route", () => {
 
       // PostureUse was emitted as side effect of the route hook.
       const postureUses = session.context.thread.fragments.filter(
-         (f) => f.type === "PostureUse",
+         (f) => f.kind === "PostureUse",
       ) as Array<{ name: string }>
       assert(postureUses.some((p) => p.name === "p2"), "PostureUse emitted for p2")
    })
