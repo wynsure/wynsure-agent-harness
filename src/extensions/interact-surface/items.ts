@@ -60,8 +60,8 @@ export interface ConfirmItem extends InteractionItemBase {
    message: string
 }
 
-export interface TodoItem extends InteractionItemBase {
-   kind: "todo"
+export interface ChecklistItem extends InteractionItemBase {
+   kind: "checklist"
    title: string
    items: { label: string; done: boolean }[]
 }
@@ -90,6 +90,55 @@ export interface NotifyItem extends InteractionItemBase {
    title: string
 }
 
+/**
+ * Rich-content item produced by the `interact__display` tool. The kind is
+ * the "raw content shown to the user" family — fire-and-forget, no activity,
+ * the body is rendered as-is (no sanitization).
+ */
+export interface DisplayItem extends InteractionItemBase {
+   kind: "display"
+   /** Raw HTML rendered via `dangerouslySetInnerHTML`. No sanitization. */
+   html: string
+}
+
+/** Lifecycle of a single step in the agent's plan. */
+export type PlanStepStatus = "pending" | "active" | "done" | "skipped"
+
+/** One step of the agent's declared plan. */
+export interface PlanStep {
+   label: string
+   status: PlanStepStatus
+}
+
+/**
+ * The agent's live roadmap, produced by `interact__plan`. Upsertable: the
+ * resource keeps exactly ONE plan item per context — re-calling the tool
+ * updates it in place so the user follows a single evolving checklist, not a
+ * pile of snapshots. Non-blocking (fire-and-forget); the agent owns progress
+ * by re-emitting the steps with updated statuses.
+ */
+export interface PlanItem extends InteractionItemBase {
+   kind: "plan"
+   /** Optional heading for the plan. */
+   title?: string
+   steps: PlanStep[]
+}
+
+/**
+ * The agent's current focus, produced by `interact__announce`. Upsertable:
+ * only the latest announce is live — re-calling replaces the previous one, so
+ * it reads as a single "working on X" indicator rather than a log. Distinct
+ * from `notify` (an append-only severity banner) and from `plan` (a
+ * multi-step roadmap): announce is the one-line "what I'm doing right now".
+ */
+export interface AnnounceItem extends InteractionItemBase {
+   kind: "announce"
+   /** Short, imperative description of the current action. */
+   action: string
+   /** Optional extra context shown alongside the action. */
+   detail?: string
+}
+
 /** Kind discriminant. A plain string — the registry is the closed surface, not the type. */
 export type InteractionKind = string
 
@@ -110,6 +159,13 @@ export interface InteractionItemEntry<P = Record<string, unknown>> {
    readonly description: string
    /** True → delegates to the `user-board` env (item pinned: pending → resolved|failed). False → fire-and-forget. */
    readonly pinned: boolean
+   /**
+    * True → the resource keeps ONE living item for this kind and replaces it in
+    * place on every call (emits `replace`, stable `seq`). Implies fire-and-
+    * forget (never pinned). Used by the agent-driven living kinds (`plan`,
+    * `announce`); false for every append/once kind.
+    */
+   readonly upsert?: boolean
    /** Canonical zod schema for the tool args (no `kind`). */
    readonly schema: ZodType<P>
    /** Normalise raw tool args into the canonical payload body (with `kind`). */
@@ -149,46 +205,63 @@ export function interactionItemEntries(): readonly InteractionItemEntry[] {
 
 // ── Per-kind schemas (private; the registry is the public face) ──────────────
 
+// `priority` is intentionally absent from every schema below: it is a UI
+// ordering hint the model cannot set meaningfully (it has no view of the other
+// pinned items). The runtime still reads `args.priority` in each `apply()` so a
+// host can inject it programmatically — it is simply hidden from the LLM contract.
 const askSchema = z.object({
-   question: z.string().describe("The question to ask"),
-   choices: z.array(z.string()).optional().describe("Fixed options to select from"),
-   multiple: z.boolean().optional().describe("Allow multiple selections (default: false)"),
-   suggestions: z.array(z.string()).optional().describe("Suggested responses for free-text input"),
-   priority: z.number().optional().describe("Optional display priority (higher = shown first when several interactions are pinned; default 0)"),
+   question: z.string().describe("The question to ask the user"),
+   choices: z.array(z.string()).optional().describe("Fixed options the user must select from. Omit for free-text input."),
+   multiple: z.boolean().optional().describe("Allow several selections from `choices` (default: false)"),
+   suggestions: z.array(z.string()).optional().describe("Suggested free-text answers shown as hints (not enforced)"),
 })
 
 const confirmSchema = z.object({
-   message: z.string().describe("The message to confirm with the user"),
-   priority: z.number().optional().describe("Optional display priority (higher = shown first when several interactions are pinned; default 0)"),
+   message: z.string().describe("The yes/no statement to confirm with the user"),
 })
 
-const todoItemSchema = z.union([
+const checklistItemSchema = z.union([
    z.string(),
    z.object({ label: z.string(), done: z.boolean().optional() }),
 ])
-const todoSchema = z.object({
-   title: z.string().describe("Title for the todo list"),
-   items: z.array(todoItemSchema).describe("Items in the todo list"),
-   priority: z.number().optional().describe("Optional display priority (higher = shown first when several interactions are pinned; default 0)"),
+const checklistSchema = z.object({
+   title: z.string().describe("Heading shown above the checklist"),
+   items: z.array(checklistItemSchema).describe("Items in the checklist. Each may be a string (defaults to not done) or `{ label, done }`."),
 })
 
 const alertSchema = z.object({
-   message: z.string().describe("The alert message"),
-   title: z.string().describe("Short heading shown in the card header (defaults to \"alert\" when empty)"),
-   level: z.enum(["info", "warn", "error"]).optional().describe("Severity tint (default: info)"),
-   priority: z.number().optional().describe("Optional display priority (higher = shown first when several interactions are pinned; default 0)"),
+   message: z.string().describe("The critical message the user must acknowledge"),
+   title: z.string().describe("Short heading shown in the card header (defaults to \"alert\")"),
+   level: z.enum(["info", "warn", "error"]).optional().describe("Severity: info, warn, or error (default: info)"),
 })
 
 const promptSchema = z.object({
-   title: z.string().optional().describe("Optional short heading for the input area"),
-   message: z.string().optional().describe("Optional prompt body shown to the user before the input"),
-   priority: z.number().optional().describe("Optional display priority (higher = shown first when several interactions are pinned; default 0)"),
+   title: z.string().optional().describe("Short heading for the input area. Omit for no heading."),
+   message: z.string().optional().describe("Body text shown above the input. Omit for no body."),
 })
 
 const notifySchema = z.object({
-   message: z.string().describe("The notification message"),
-   title: z.string().describe("Short heading shown in the banner header (defaults to \"notify\" when empty)"),
-   level: z.enum(["info", "warn", "error"]).optional().describe("Notification severity (default: info)"),
+   message: z.string().describe("The notification message to display"),
+   title: z.string().describe("Short heading shown in the banner header (defaults to \"notify\")"),
+   level: z.enum(["info", "warn", "error"]).optional().describe("Severity: info, warn, or error (default: info)"),
+})
+
+const displaySchema = z.object({
+   html: z.string().describe("The raw HTML to render. Rendered as-is via dangerouslySetInnerHTML — no sanitization."),
+})
+
+const planStepSchema = z.object({
+   label: z.string().describe("Short description of this step"),
+   status: z.enum(["pending", "active", "done", "skipped"]).optional().describe("Lifecycle state: pending, active, done, or skipped (default: pending)"),
+})
+const planSchema = z.object({
+   title: z.string().optional().describe("Heading for the plan. Omit for no heading."),
+   steps: z.array(planStepSchema).describe("The full plan — re-calling replaces the live plan in place, so send every step each time."),
+})
+
+const announceSchema = z.object({
+   action: z.string().describe("Short imperative phrase describing what you are doing right now (e.g. \"Running tests\")"),
+   detail: z.string().optional().describe("Extra context shown alongside the action. Omit for none."),
 })
 
 // ── Arg normalisers (private) ─────────────────────────────────────────────────
@@ -199,7 +272,7 @@ function asStringArray(value: unknown): string[] {
       : []
 }
 
-function normalizeTodoItems(value: unknown): { label: string; done: boolean }[] {
+function normalizeChecklistItems(value: unknown): { label: string; done: boolean }[] {
    if (!Array.isArray(value)) return []
    return value.map((item) => {
       if (typeof item === "string") return { label: item, done: false }
@@ -219,6 +292,24 @@ function optionalPriority(args: Record<string, any>): number | undefined {
       : undefined
 }
 
+const PLAN_STATUSES = new Set(["pending", "active", "done", "skipped"])
+
+/** Coerce raw plan-step args into the canonical `{ label, status }` shape. */
+function normalizePlanSteps(value: unknown): PlanStep[] {
+   if (!Array.isArray(value)) return []
+   return value.map((s) => {
+      if (typeof s === "string") return { label: s, status: "pending" }
+      if (s && typeof s === "object" && "label" in s) {
+         const raw = (s as any).status
+         return {
+            label: String((s as any).label),
+            status: typeof raw === "string" && PLAN_STATUSES.has(raw) ? (raw as PlanStepStatus) : "pending",
+         }
+      }
+      return { label: String(s), status: "pending" }
+   })
+}
+
 function notifyLevelOf(args: Record<string, any>): NotifyLevel {
    return args.level === "warn" || args.level === "error" ? args.level : "info"
 }
@@ -228,7 +319,7 @@ function notifyLevelOf(args: Record<string, any>): NotifyLevel {
 registerInteractionItem({
    kind: "ask",
    tool: "interact__ask",
-   description: "Ask the user a question. Provide 'choices' for single/multiple selection, 'suggestions' for free-text with hints, or neither for pure free-text input.",
+   description: "Ask the user a question and block until they answer (the agent is suspended). Set `choices` to constrain the answer to a fixed list (single or multiple when `multiple` is true), `suggestions` to hint free-text answers, or omit both for pure free-text. Use for any question needing a selected or structured reply. For an open-ended reply that becomes a conversation turn, use `interact__prompt` instead; for a yes/no decision, use `interact__confirm`.",
    pinned: true,
    schema: askSchema,
    apply(args) {
@@ -246,7 +337,7 @@ registerInteractionItem({
 registerInteractionItem({
    kind: "confirm",
    tool: "interact__confirm",
-   description: "Ask the user for a yes/no confirmation before proceeding.",
+   description: "Ask the user for a yes/no confirmation and block until they respond (the agent is suspended). Use before an irreversible or high-impact action. For anything other than a binary approve/reject decision, prefer `interact__ask` (structured choices) or `interact__prompt` (free text).",
    pinned: true,
    schema: confirmSchema,
    apply(args) {
@@ -259,16 +350,16 @@ registerInteractionItem({
 })
 
 registerInteractionItem({
-   kind: "todo",
-   tool: "interact__todo",
-   description: "Display an interactive todo list. The user can check off completed items and submit. Use to track multi-step processes with the user.",
+   kind: "checklist",
+   tool: "interact__checklist",
+   description: "Present an interactive checklist the user completes and submits, and block until they submit (the agent is suspended). Use when you want the user to mark which steps are done in a multi-step process. For a checklist the agent itself tracks as it works (non-blocking, agent-driven), use `interact__plan` instead.",
    pinned: true,
-   schema: todoSchema,
+   schema: checklistSchema,
    apply(args) {
       return {
-         kind: "todo",
+         kind: "checklist",
          title: typeof args.title === "string" ? args.title : "",
-         items: normalizeTodoItems(args.items),
+         items: normalizeChecklistItems(args.items),
          priority: optionalPriority(args),
       }
    },
@@ -277,7 +368,7 @@ registerInteractionItem({
 registerInteractionItem({
    kind: "alert",
    tool: "interact__alert",
-   description: "Alert the user with a message that MUST be acknowledged before continuing. Use to force the user's attention on something critical before proceeding (the agent is suspended until acknowledged).",
+   description: "Surface a critical message the user MUST acknowledge before you continue (the agent is suspended until acknowledged). Use only to force attention on something that genuinely blocks progress. For a non-blocking severity notice, use `interact__notify` instead.",
    pinned: true,
    schema: alertSchema,
    apply(args) {
@@ -294,7 +385,7 @@ registerInteractionItem({
 registerInteractionItem({
    kind: "prompt",
    tool: "interact__prompt",
-   description: "Hand control to the user so they can drive the conversation. `message` is the prompt body shown before the input; `title` is an optional heading.",
+   description: "Hand control to the user for an open-ended reply and block until they respond (the agent is suspended). The reply becomes a real conversation turn. Use when you want free-form input. For a targeted question with selectable choices, use `interact__ask` instead; for a yes/no decision, use `interact__confirm`.",
    pinned: true,
    schema: promptSchema,
    apply(args) {
@@ -316,7 +407,7 @@ registerInteractionItem({
 registerInteractionItem({
    kind: "notify",
    tool: "interact__notify",
-   description: "Display a notification to the user. Fire-and-forget: the agent continues immediately without waiting for any acknowledgement. Use to surface information (progress, status, warnings) while the work goes on.",
+   description: "Display a severity-tinted notification banner (info/warn/error). Fire-and-forget: you continue immediately and there is nothing for the user to resolve. Use to surface status, progress, or warnings while work goes on. Appends a new banner each call. For a single evolving 'working on X now' indicator use `interact__announce`; to force attention before continuing use `interact__alert`.",
    pinned: false,
    schema: notifySchema,
    apply(args) {
@@ -329,11 +420,70 @@ registerInteractionItem({
    },
 })
 
+// `interact__display` produces a single `display` item kind. Fire-and-forget:
+// the agent continues immediately and the item has no activity binding. The
+// body is rendered as-is (no sanitization) so the tool is meant for trusted
+// content the agent authors itself.
+registerInteractionItem({
+   kind: "display",
+   tool: "interact__display",
+   description: "Render a raw HTML card in the chat (custom layout, inline CSS, images, iframes). Fire-and-forget: you continue immediately. The HTML is rendered as-is with no sanitization, so use only for content you author yourself. For plain text, just speak normally — your message is shown as-is and is always preferred over `display` when it would do. For a severity notice use `interact__notify` instead.",
+   pinned: false,
+   schema: displaySchema,
+   apply(args) {
+      return {
+         kind: "display",
+         html: typeof args.html === "string" ? args.html : "",
+      }
+   },
+})
+
+// `interact__plan` and `interact__announce` are the agent-driven living kinds:
+// fire-and-forget (never pinned) but upsertable — the resource keeps exactly one
+// living item per kind and replaces it in place on every call. The agent owns
+// progress by re-emitting; the host sees a single evolving indicator, not a log.
+registerInteractionItem({
+   kind: "plan",
+   tool: "interact__plan",
+   description: "Declare or update your plan as a checklist of steps the user can follow along. Non-blocking: you continue immediately. Upsertable: re-calling replaces the live plan in place (the user sees one evolving roadmap, not a stack of versions), so send the FULL plan every time. Mark each step pending → active → done (or skipped) as you progress. Declare it when you start multi-step work and keep it current. For a one-line 'what I'm doing right now' indicator use `interact__announce`; for a checklist the user completes themselves use `interact__checklist`.",
+   pinned: false,
+   upsert: true,
+   schema: planSchema,
+   apply(args) {
+      return {
+         kind: "plan",
+         title: typeof args.title === "string" ? args.title : undefined,
+         steps: normalizePlanSteps(args.steps),
+      }
+   },
+})
+
+registerInteractionItem({
+   kind: "announce",
+   tool: "interact__announce",
+   description: "Tell the user what you are doing right now in one short line. Non-blocking: you continue immediately. Upsertable: re-calling replaces the previous announce (only your current focus is shown, not a log). Use as a live 'working on X' indicator. For a structured multi-step roadmap use `interact__plan`; for a severity-tinted notice (info/warn/error) use `interact__notify`.",
+   pinned: false,
+   upsert: true,
+   schema: announceSchema,
+   apply(args) {
+      return {
+         kind: "announce",
+         action: typeof args.action === "string" ? args.action : "",
+         detail: typeof args.detail === "string" ? args.detail : undefined,
+      }
+   },
+})
+
 // ── Tool catalogue (derived from the registry) ───────────────────────────────
 
-/** Tool guides for every registered interact__* kind — the full catalogue an InteractSurface exposes. */
+/**
+ * Tool guides for every registered interact__* kind — the full catalogue an
+ * InteractSurface exposes. Iterates over the per-tool map so multi-tool kinds
+ * (e.g. `display` → `interact__display_html` + `interact__display_markdown`)
+ * contribute every tool, not just the last one registered.
+ */
 export function getInteractTools(): readonly ToolGuide[] {
-   return [...ENTRIES.values()].map((e) =>
+   return [...BY_TOOL.values()].map((e) =>
       defineTool(e.tool, e.description, e.schema as ZodType<unknown>),
    )
 }

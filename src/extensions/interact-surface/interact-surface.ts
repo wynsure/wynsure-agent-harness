@@ -79,7 +79,25 @@ import {
 
 // ── Resource object ───────────────────────────────────────────────────────────
 
-export const InteractSurfaceSpecSchema = z.object({}).passthrough()
+/**
+ * Subset of interact tools the surface publishes. Each entry is either the
+ * kind discriminant (`"ask"`, `"notify"`, `"display"`, …) OR a full tool
+ * name (`"interact__ask"`, …). When a kind matches, every tool registered
+ * under that kind is included — this is the only sensible semantic for
+ * multi-tool kinds like `display` (which carries both `interact__display_html`
+ * and `interact__display_markdown`). Omit the field (or pass `"*"`) to keep
+ * the full catalogue.
+ */
+const InteractSurfaceToolsFilterSchema = z.union([
+   z.literal("*"),
+   z.array(z.string().min(1)),
+])
+
+export const InteractSurfaceSpecSchema = z
+   .object({
+      tools: InteractSurfaceToolsFilterSchema.optional(),
+   })
+   .passthrough()
 export type InteractSurfaceSpec = z.infer<typeof InteractSurfaceSpecSchema>
 
 export const InteractSurfaceManifestSchema = z
@@ -92,6 +110,21 @@ export const InteractSurfaceManifestSchema = z
    .passthrough()
 
 export type InteractSurfaceManifest = z.infer<typeof InteractSurfaceManifestSchema>
+
+/**
+ * True iff `requested` matches `toolName` — either as the full tool name
+ * (e.g. `"interact__display_markdown"`) OR as the kind discriminant of the
+ * tool's registry entry (e.g. `"display"` matches both `interact__display_html`
+ * and `interact__display_markdown`). The kind is looked up via the registry
+ * rather than derived from the tool-name suffix, because a multi-tool kind
+ * (like `display`) does not have its kind as a suffix of any one tool name.
+ */
+function interactToolMatches(toolName: string, requested: string): boolean {
+   if (requested === toolName) return true
+   const entry = interactionItemEntryByTool(toolName)
+   if (entry && entry.kind === requested) return true
+   return false
+}
 
 /**
  * The InteractSurface resource. Publishes the interact__* tools (derived from
@@ -114,7 +147,10 @@ export class InteractSurfaceObject implements ResourceObject {
    }
 
    getTools(): ToolGuide[] {
-      return [...getInteractTools()]
+      const all = getInteractTools()
+      const filter = this.spec.tools
+      if (filter === undefined || filter === "*") return [...all]
+      return all.filter((g) => filter.some((req) => interactToolMatches(g.name, req)))
    }
 
    getHooks(_trigger: HookTrigger): HookEntry[] {
@@ -138,7 +174,22 @@ export class InteractSurfaceObject implements ResourceObject {
       manifest: InteractSurfaceManifest,
       _ctx: ObjectLoadContext,
    ): Promise<InteractSurfaceObject> {
-      return new InteractSurfaceObject(manifest.metadata, manifest.spec)
+      const spec = manifest.spec
+      // Fail fast on unknown tool names so a typo in the blueprint surfaces at
+      // load time, not as a silently empty surface at runtime.
+      if (spec.tools !== undefined && spec.tools !== "*") {
+         const all = getInteractTools()
+         for (const requested of spec.tools) {
+            if (!all.some((g) => interactToolMatches(g.name, requested))) {
+               throw new Error(
+                  `InteractSurface ${manifest.metadata.name}: unknown tool "${requested}" in spec.tools. ` +
+                     `Expected a kind (ask/confirm/checklist/alert/notify/prompt/display/plan/announce) ` +
+                     `or a full tool name (interact__*).`,
+               )
+            }
+         }
+      }
+      return new InteractSurfaceObject(manifest.metadata, spec)
    }
 
 /**
@@ -165,17 +216,28 @@ export class InteractSurfaceObject implements ResourceObject {
       const binding = entry.pinned && deliveryId !== undefined
          ? { activityId: deliveryId }
          : undefined
-      const draft = createInteractionItemDraft(
-         payload,
-         {
-            contextId: context.contextId,
-            parentId: context.parentId,
-            agentName: context.agentName,
-         },
-         binding,
-      )
-      const item = stream.appendDraft(draft)
-      this.emitInteraction(context, { op: "append", item })
+       const draft = createInteractionItemDraft(
+          payload,
+          {
+             contextId: context.contextId,
+             parentId: context.parentId,
+             agentName: context.agentName,
+          },
+          binding,
+       )
+
+       // Upsertable living kinds (plan, announce): replace the single living
+       // item of this kind in place (stable seq), then settle immediately. They
+       // are fire-and-forget — never pinned, never delegated to user-board.
+       if (entry.upsert) {
+          const { item, replaced } = stream.upsertLive(entry.kind, draft)
+          this.emitInteraction(context, { op: replaced ? "replace" : "append", item })
+          context.deliver(deliveryId, { delivered: true })
+          return undefined
+       }
+
+       const item = stream.appendDraft(draft)
+       this.emitInteraction(context, { op: "append", item })
 
       if (entry.pinned) {
          // Delegates the response to the user-board environment (the kind's
@@ -325,16 +387,25 @@ scheme.register({
    manifestSchema: InteractSurfaceManifestSchema,
    factory: InteractSurfaceObject.fromManifest,
    metadata: {
-      role: "Surface d'outils interact__* ; chaque kind décide via `pinned` s'il backe sa réponse par une activité user-board.",
+      role: "Surface d'outils interact__* ; chaque kind décide via `pinned` s'il backe sa réponse par une activité user-board. `spec.tools` filtre le sous-ensemble publié (par défaut : tous).",
       surface: "Permanent (sélectionné via `tools: \"<name>/*\"`)",
       example: `apiVersion: agent/v1
 kind: InteractSurface
 metadata:
   name: user
-spec: {}`,
+spec: {}                            # publie les 9 tools (ask/confirm/checklist/alert/notify/prompt/display/plan/announce)
+---
+apiVersion: agent/v1
+kind: InteractSurface
+metadata:
+  name: chat
+spec:
+  tools: [ask, confirm, prompt]     # surface minimale : questions + prompt, pas de notification ni d'affichage riche`,
       notes: [
-         "Publie les six tools interact__* (ask/confirm/todo/alert/notify/prompt).",
-         "Chaque entrée du registre déclare `pinned` : true → délègue à `user-board` (item pinned jusqu'à résolution) ; false → livré immédiatement (fire-and-forget, jamais pinned).",
+         "Publie les tools interact__* (par défaut les 9 : ask/confirm/checklist/alert/notify/prompt/display/plan/announce).",
+         "`spec.tools` filtre le sous-ensemble : un kind discriminant (ex. `ask`) ou un nom de tool complet (ex. `interact__ask`).",
+         "Chaque entrée du registre déclare `pinned` : true → délègue à `user-board` (item pinned jusqu'à résolution) ; false → livré immédiatement (fire-and-forget, jamais pinned). `display` est fire-and-forget (rendu HTML brut, pas d'attente).",
+         "Les kinds `plan` et `announce` sont fire-and-forget ET upsertables : une seule instance vivante par kind, remplacée à chaque appel (le user suit un roadmap évolutif, pas une pile de snapshots).",
          "Aucun branchement par nom de kind : notify et prompt passent par le même chemin dans applyTool.",
          "La réaction post-résolution (ex. `prompt` émet un `UserMessage`) est portée par le hook `reply` de chaque entrée du registre, jamais par le runtime.",
          "Aucun effet tant qu'aucune entrée `toolset` ne la sélectionne.",

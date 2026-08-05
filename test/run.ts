@@ -5,10 +5,12 @@
  * Usage: npm test
  */
 import "./activity.test"
+import "./interact-upsert.test"
 import "./resources.test"
 import "./steering.test"
 import "./hooks-guardrails.test"
 import "./state-tree.test"
+import "./mcp-deno-worker.test"
 import { runAll } from "./runner.ts"
 
 runAll().catch((err) => {

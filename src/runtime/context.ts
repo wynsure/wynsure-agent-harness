@@ -533,7 +533,7 @@ export class AgentContext {
                      // an error (inline path only — deferred errors are not
                      // attributed back, matching the previous behavior).
                      if (isError) {
-                        await this.maybeFireToolError()
+                        await this.maybeFireToolError(toolUse.toolName)
                      }
                   }
                }
@@ -627,9 +627,12 @@ export class AgentContext {
       this.emitSteerFragment(text, as)
    }
 
-   private async fireHooks(trigger: HookTrigger): Promise<HookFireResult> {
-      const collected = this.collectHooks(trigger)
-      if (collected.length === 0) return { outcome: { kind: "continue" } }
+    private async fireHooks(
+       trigger: HookTrigger,
+       toolName?: ToolName,
+    ): Promise<HookFireResult> {
+       const collected = this.collectHooks(trigger, toolName)
+       if (collected.length === 0) return { outcome: { kind: "continue" } }
 
       let didExit = false
       const errors: string[] = []
@@ -699,21 +702,22 @@ export class AgentContext {
       }
    }
 
-   /**
-    * Fire `on_tool_error` hooks if any are declared, with reentrancy guard.
-    * Called from the catch path of a tool execution. A hook failing inside
-    * this fire must not re-trigger the trigger (infinite cascade).
-    */
-   private async maybeFireToolError(): Promise<void> {
-      if (this.firingToolError) return
-      if (this.collectHooks("on_tool_error").length === 0) return
-      this.firingToolError = true
-      try {
-         await this.fireHooks("on_tool_error")
-      } finally {
-         this.firingToolError = false
-      }
-   }
+    /**
+     * Fire `on_tool_error` hooks if any are declared for the failing tool, with
+     * reentrancy guard. Called from the catch path of a tool execution. A hook
+     * failing inside this fire must not re-trigger the trigger (infinite
+     * cascade). The `toolName` is passed so hooks can filter via `appliesTo`.
+     */
+    private async maybeFireToolError(toolName: ToolName): Promise<void> {
+       if (this.firingToolError) return
+       if (this.collectHooks("on_tool_error", toolName).length === 0) return
+       this.firingToolError = true
+       try {
+          await this.fireHooks("on_tool_error", toolName)
+       } finally {
+          this.firingToolError = false
+       }
+    }
 
    private async activatePosture(postureName: string): Promise<void> {
       const postureResource = this.session.blueprint.getResource(postureName)
@@ -751,34 +755,50 @@ export class AgentContext {
       this.session.events.emit("usage", { ...this.parentSnapshot, usage: { ...this.tokenUsage } })
    }
 
-   /**
-    * Collect every hook declared for a trigger, tagged with its owner resource
-    * name. Owners are, in order: the agent, the active posture, then attached
-    * skills. Each hook's fully-qualified audit name is `hooks:<owner>:<local>`
-    * — the local part is the optional `name` field, falling back to a derived
-    * default (type + ref). The owner is what disambiguates two hooks with the
-    * same local name across resources.
-    */
-   private collectHooks(trigger: HookTrigger): Array<{ owner: string; hook: HookEntry }> {
-      const out: Array<{ owner: string; hook: HookEntry }> = []
-      for (const hook of this.agent.getHooks(trigger)) {
-         out.push({ owner: this.agent.name, hook })
-      }
-      if (this.posture) {
-         for (const hook of this.posture.getHooks(trigger)) {
-            out.push({ owner: this.posture.name, hook })
-         }
-      }
-      for (const name of this.activeSkillNames()) {
-         const res = this.session.blueprint.getResource(name)
-         if (res instanceof SkillObject) {
-            for (const hook of res.getHooks(trigger)) {
-               out.push({ owner: res.name, hook })
-            }
-         }
-      }
-      return out
-   }
+    /**
+     * Collect every hook declared for a trigger, tagged with its owner resource
+     * name. Owners are, in order: the agent, the active posture, then attached
+     * skills. Each hook's fully-qualified audit name is `hooks:<owner>:<local>`
+     * — the local part is the optional `name` field, falling back to a derived
+     * default (type + ref). The owner is what disambiguates two hooks with the
+     * same local name across resources.
+     *
+     * When `toolName` is provided (the tool-scoped triggers `on_tool_use` /
+     * `on_tool_error`), each hook's optional `appliesTo` selector is matched
+     * against it; a non-matching hook is filtered out. A hook without
+     * `appliesTo` always matches (back-compat). The selector reuses the
+     * guardrail semantics (`"*"`, name list, or label selector on the
+     * publishing resource).
+     */
+    private collectHooks(
+       trigger: HookTrigger,
+       toolName?: ToolName,
+    ): Array<{ owner: string; hook: HookEntry }> {
+       const out: Array<{ owner: string; hook: HookEntry }> = []
+       const push = (owner: string, hooks: HookEntry[]): void => {
+          for (const hook of hooks) {
+             if (
+                toolName !== undefined &&
+                hook.appliesTo !== undefined &&
+                !this.guardrailAppliesTo(hook.appliesTo, toolName)
+             ) {
+                continue
+             }
+             out.push({ owner, hook })
+          }
+       }
+       push(this.agent.name, this.agent.getHooks(trigger))
+       if (this.posture) {
+          push(this.posture.name, this.posture.getHooks(trigger))
+       }
+       for (const name of this.activeSkillNames()) {
+          const res = this.session.blueprint.getResource(name)
+          if (res instanceof SkillObject) {
+             push(res.name, res.getHooks(trigger))
+          }
+       }
+       return out
+    }
 
    /**
     * Resolve the active guardrails (from behavior + attached skills) to those
@@ -1083,12 +1103,15 @@ export class AgentContext {
     ): Promise<UseResult> {
       const parentRoot = fromHarness ? this.harnessActivityId : this.modelActivityId
 
-      if (!fromHarness) {
-         const guardrailErrors = this.checkGuardrails(toolName, args)
-         if (guardrailErrors) {
-            return this.failInline(parentRoot, id, toolName, { errors: guardrailErrors })
-         }
-         const hookFire = await this.fireHooks("on_tool_use")
+       if (!fromHarness) {
+          const guardrailErrors = this.checkGuardrails(toolName, args)
+          if (guardrailErrors) {
+             return this.failInline(parentRoot, id, toolName, { errors: guardrailErrors })
+          }
+          // Pass the LLM-emitted toolName so hooks can filter via `appliesTo`
+          // (selector shape identical to guardrails). A hook without `appliesTo`
+          // still fires for every tool (back-compat).
+          const hookFire = await this.fireHooks("on_tool_use", toolName)
          if (hookFire.errors && hookFire.errors.length > 0) {
             return this.failInline(parentRoot, id, toolName, { errors: hookFire.errors })
          }

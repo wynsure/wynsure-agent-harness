@@ -17,6 +17,7 @@ import {
 import { createBlueprintFrom, type Blueprint } from "../src/blueprint/blueprint.ts"
 import { AgentSession } from "../src/runtime/session.ts"
 import { PostureObject, SkillObject, AgentObject } from "../src/blueprint/resources/index.ts"
+import { InteractSurfaceObject, InteractSurfaceManifestSchema } from "../src/extensions/interact-surface/index.ts"
 import { createToolUse, createAgentMessage, type InstructionFragment } from "../src/state/fragment.ts"
 
 // Ensure every core resource loader (agent/posture/preset/skill) is registered.
@@ -840,6 +841,69 @@ describe("memory resource", () => {
       const surfaceAfter = withSelection.session.context.availableToolNames()
       assert(surfaceAfter.includes("convo__set"), "convo__set exposed once selected")
       assert(surfaceAfter.includes("convo__get"), "convo__get exposed once selected")
+   })
+})
+
+describe("InteractSurface — spec.tools subset", () => {
+   it("omitted spec.tools publishes the full catalogue (9 tools)", () => {
+      const surface = new InteractSurfaceObject({ name: "user" }, {})
+      const names = surface.getTools().map((g) => g.name).sort()
+      eq(
+         names.length,
+         9,
+         "all 9 interact tools exposed when no filter is set",
+      )
+      assert(names.includes("interact__ask"), "ask is in the default catalogue")
+      assert(names.includes("interact__display"), "display is in the default catalogue")
+      assert(names.includes("interact__plan"), "plan is in the default catalogue")
+      assert(names.includes("interact__announce"), "announce is in the default catalogue")
+   })
+
+   it("spec.tools: '*' is equivalent to omitting the field", () => {
+      const surface = new InteractSurfaceObject({ name: "user" }, { tools: "*" })
+      eq(
+         surface.getTools().length,
+         9,
+         "'*' keeps the full catalogue",
+      )
+   })
+
+   it("spec.tools: a list of kinds publishes only the matching tools", () => {
+      const surface = new InteractSurfaceObject(
+         { name: "chat" },
+         { tools: ["ask", "confirm", "prompt"] },
+      )
+      const names = surface.getTools().map((g) => g.name).sort()
+      eq(names, ["interact__ask", "interact__confirm", "interact__prompt"])
+   })
+
+   it("spec.tools: a kind matches its (single) tool, and a full name matches the same tool", () => {
+      // `display` is now a single-tool kind — both spellings resolve to the
+      // same tool guide.
+      const byKind = new InteractSurfaceObject({ name: "a" }, { tools: ["display"] })
+      const byName = new InteractSurfaceObject({ name: "b" }, { tools: ["interact__display"] })
+      eq(byKind.getTools().map((g) => g.name), ["interact__display"])
+      eq(byName.getTools().map((g) => g.name), ["interact__display"])
+   })
+
+   it("fromManifest rejects an unknown tool name at load time", async () => {
+      const manifest = InteractSurfaceManifestSchema.parse({
+         apiVersion: "agent/v1",
+         kind: "InteractSurface",
+         metadata: { name: "bad" },
+         spec: { tools: ["ask", "does_not_exist"] },
+      })
+      let threw: unknown
+      try {
+         await InteractSurfaceObject.fromManifest(manifest, {} as any)
+      } catch (err) {
+         threw = err
+      }
+      assert(!!threw, "fromManifest throws on an unknown tool name")
+      assert(
+         String(threw).includes("does_not_exist"),
+         "the error names the offending entry",
+      )
    })
 })
 

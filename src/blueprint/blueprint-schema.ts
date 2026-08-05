@@ -116,12 +116,41 @@ export type HookTrigger =
  */
 const HookNameSchema = z.string().optional()
 
+/**
+ * Selector describing which tool names a guardrail or hook applies to. Three
+ * forms: `"*"` (all tools), an explicit list of tool names, or a label
+ * selector matched against the resource that publishes the tool (same
+ * semantics as a toolset selector). See docs/hooks-guardrails.spec.md §
+ * "Sélecteur". Defined here so both hook and guardrail schemas can reference
+ * it without a forward temporal-dead-zone reference.
+ */
+export const GuardrailAppliesToSchema = z.union([
+   z.literal("*"),
+   z.array(z.string()),
+   z
+      .object({
+         matchLabels: z.record(z.string(), z.string()).optional(),
+      })
+      .passthrough(),
+])
+
+export type GuardrailAppliesTo = z.infer<typeof GuardrailAppliesToSchema>
+
+// `appliesTo` is optional on every hook variant and only meaningful for the
+// tool-scoped triggers (`on_tool_use`, `on_tool_error`): it filters the hook
+// by the LLM-emitted tool name (or the publishing resource's labels), using
+// the same selector shape as guardrails. A hook without `appliesTo` always
+// matches (back-compat). Ignored for `on_start` / `on_completion` (no tool
+// context).
+const HookAppliesToSchema = GuardrailAppliesToSchema.optional()
+
 export const TooluseHookSchema = z
    .object({
       name: HookNameSchema,
       type: z.literal("tooluse"),
       tool: z.string(),
       args: z.record(z.string(), z.any()).optional(),
+      appliesTo: HookAppliesToSchema,
    })
    .passthrough()
 
@@ -130,6 +159,7 @@ export const RouteHookSchema = z
       name: HookNameSchema,
       type: z.literal("route"),
       posture: z.string(),
+      appliesTo: HookAppliesToSchema,
    })
    .passthrough()
 
@@ -137,6 +167,7 @@ export const ExitHookSchema = z
    .object({
       name: HookNameSchema,
       type: z.literal("exit"),
+      appliesTo: HookAppliesToSchema,
    })
    .passthrough()
 
@@ -158,24 +189,6 @@ export const HooksSchema = z
    .passthrough()
 
 export type HooksDesc = z.infer<typeof HooksSchema>
-
-/**
- * Selector describing which tool names a guardrail applies to. Three forms:
- * `"*"` (all tools), an explicit list of tool names, or a label selector
- * matched against the resource that publishes the tool (same semantics as a
- * toolset selector). See docs/hooks-guardrails.spec.md § "Sélecteur".
- */
-export const GuardrailAppliesToSchema = z.union([
-   z.literal("*"),
-   z.array(z.string()),
-   z
-      .object({
-         matchLabels: z.record(z.string(), z.string()).optional(),
-      })
-      .passthrough(),
-])
-
-export type GuardrailAppliesTo = z.infer<typeof GuardrailAppliesToSchema>
 
 /**
  * A single guardrail declaration. Inlined under `spec.guardrails[]` of an

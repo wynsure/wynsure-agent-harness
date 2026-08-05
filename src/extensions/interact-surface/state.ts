@@ -140,6 +140,7 @@ export interface InteractionItemDraft {
 /** Polymorphic mutation carried on the "interaction" event channel. */
 export type InteractionItemEvent =
    | { op: "append"; item: InteractionItem }
+   | { op: "replace"; item: InteractionItem }
    | { op: "update"; activityId: string; status: RequestStatus; result?: any }
 
 // ── Projection base (used internally by the resource's bindToSession) ────────
@@ -200,14 +201,41 @@ export class InteractionStream extends Leaf<InteractionItem> {
     * expects a fully-formed cell) to keep the variance clean across
     * Leaf<InteractionItem> ↔ Leaf<Cell> at the Tree factory seam.
     */
-   appendDraft(draft: InteractionItemDraft): InteractionItem {
-      const item = { ...draft, seq: this.seqCounter++ } as InteractionItem
-      super.append(item)
-      if (typeof item.status === "string" && typeof item.activityId === "string") {
-         this.pinnedIndex.set(item.activityId, this.length - 1)
-      }
-      return item
-   }
+    appendDraft(draft: InteractionItemDraft): InteractionItem {
+       const item = { ...draft, seq: this.seqCounter++ } as InteractionItem
+       super.append(item)
+       if (typeof item.status === "string" && typeof item.activityId === "string") {
+          this.pinnedIndex.set(item.activityId, this.length - 1)
+       }
+       return item
+    }
+
+    /**
+     * Upsert the live item for `kind`: replace the existing item of that kind
+     * in place (preserving its `seq`), or append it on first sight. Upsertable
+     * kinds (declared `upsert: true` in the registry) keep exactly ONE living
+     * item per kind — re-calling the tool updates it rather than stacking
+     * snapshots. Routing is by `seq` on the host side, which is why it is kept
+     * stable across replaces. Scans backward so the lookup needs no index to
+     * rebuild on `restore` (there is at most one item per upsertable kind).
+     * Returns the item and whether it replaced an existing one (false on first
+     * sight) so the caller emits `append` vs `replace`.
+     */
+    upsertLive(kind: string, draft: InteractionItemDraft): {
+       item: InteractionItem
+       replaced: boolean
+    } {
+       for (let i = this.cells.length - 1; i >= 0; i--) {
+          if (this.cells[i].kind === kind) {
+             const item = { ...draft, seq: this.cells[i].seq } as InteractionItem
+             this.set(i, item)
+             return { item, replaced: true }
+          }
+       }
+       const item = { ...draft, seq: this.seqCounter++ } as InteractionItem
+       super.append(item)
+       return { item, replaced: false }
+    }
 
    /**
     * Rewrite the pinned item bound to `activityId` with the terminal status

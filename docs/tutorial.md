@@ -34,9 +34,9 @@ command without a path, it offers an interactive picker of those files.
 Create `pantri.blueprint.yaml` with three resources: a model, an interaction
 surface, and the agent. The model has an empty `spec` because every field falls
 back to the `OPENAI_*` environment variables. The `InteractSurface` resource is
-shipped by the harness and publishes the `interact__*` tools (ask, confirm, todo,
-notify, message); the agent references it via `tools: user/*` so it can talk to
-a human.
+shipped by the harness and publishes the `interact__*` tools (ask, confirm, checklist,
+alert, notify, prompt, display, plan, announce); the agent references it via
+`tools: user/*` so it can talk to a human.
 
 ```yaml
 apiVersion: agent/v1

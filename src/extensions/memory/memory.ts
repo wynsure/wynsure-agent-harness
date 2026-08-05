@@ -66,7 +66,7 @@ export class MemoryObject implements ResourceObject {
       return [
          {
             name: `${this.name}__set`,
-            intent: `Write a value to the "${this.name}" memory under a string key.`,
+             intent: `Store a value in the "${this.name}" memory under a string key. This memory is local to the current context and is lost when the session ends.`,
             input: z.object({
                key: z.string().describe("Memory key"),
                value: z.any().describe("Arbitrary JSON value to store"),
@@ -74,7 +74,7 @@ export class MemoryObject implements ResourceObject {
          },
          {
             name: `${this.name}__get`,
-            intent: `Read a value from the "${this.name}" memory by key.`,
+             intent: `Read a value from the "${this.name}" memory by key. Returns null if the key is unset. The memory is local to the current context.`,
             input: z.object({
                key: z.string().describe("Memory key"),
             }),

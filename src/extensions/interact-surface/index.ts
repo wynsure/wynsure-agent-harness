@@ -44,10 +44,15 @@ export type {
 export type {
    AskItem,
    ConfirmItem,
-   TodoItem,
+   ChecklistItem,
    AlertItem,
    PromptItem,
    NotifyItem,
+   DisplayItem,
+   PlanStep,
+   PlanStepStatus,
+   PlanItem,
+   AnnounceItem,
    InteractionKind,
    InteractionItemEntry,
 } from "./items.ts"

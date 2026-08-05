@@ -1,6 +1,6 @@
 {
   "name": "@kanop.ai/agent-blueprint-harness",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Runtime agent harness: blueprints, sessions, fragments, activities",
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
