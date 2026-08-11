@@ -1,0 +1,13 @@
+/node_modules
+/logs
+/dist
+/packages/*/dist
+/packages/*/node_modules
+/packages/*/webapp/dist
+/packages/*/webapp/node_modules
+/packages/*/webapp/tsconfig.tsbuildinfo
+*.tsbuildinfo
+/packages/*/package.json.dev.bak
+*.log
+.env
+*.tgz
