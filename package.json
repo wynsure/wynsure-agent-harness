@@ -2,7 +2,8 @@
   "name": "@kanop.ai/agent-blueprint-harness",
   "version": "0.1.8",
   "description": "Runtime agent harness: blueprints, sessions, fragments, activities",
-  "license": "MIT",
+  "author": "Mphasis Wyde",
+  "license": "SEE LICENSE IN license.txt",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/types.d.ts",
@@ -46,9 +47,6 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@types/node": "^22.15.2",
-    "tsup": "^8.5.1",
-    "tsx": "^4.23.12",
-    "typescript": "^6.0.3"
+    "@types/node": "^22.15.2"
   }
 }

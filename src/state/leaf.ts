@@ -16,7 +16,7 @@ import type { Tree } from "./tree.ts"
  * name (`kind`) is what lets generic code branch over a `Leaf<Cell>` without
  * knowing which leaf it holds.
  *
- * The name echoes the kanopi Tree/Leaf/Cell vocabulary: a Leaf is a sequence
+ * The name echoes the Tree/Leaf/Cell vocabulary: a Leaf is a sequence
  * of Cells. A Cell is directly serializable (plain JSON).
  */
 export interface Cell {
