@@ -2,7 +2,7 @@
   "name": "@kanop.ai/agent-blueprint-harness",
   "version": "0.1.8",
   "description": "Runtime agent harness: blueprints, sessions, fragments, activities",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/types.d.ts",
