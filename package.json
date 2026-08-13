@@ -47,6 +47,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@types/node": "^22.15.2"
+    "@types/node": "^22.15.2",
+    "tsup": "^8.3.0"
   }
 }
