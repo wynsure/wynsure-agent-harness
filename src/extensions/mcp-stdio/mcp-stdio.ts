@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
-import { z, type ZodTypeAny } from "zod"
+import { z } from "zod"
 import {
    type Blueprint,
    type ResourceObject,
@@ -20,6 +20,7 @@ import {
 import type { AgentContext } from "../../runtime/context.ts"
 import type { ActivityId } from "../../state/activity.ts"
 import { AGENT_API_VERSION } from "../../blueprint/api-version.ts"
+import { jsonSchemaObjectToZod } from "../mcp-deno-worker/schema.ts"
 
 export const McpStdioSpecSchema = z
    .object({
@@ -50,34 +51,6 @@ export const McpStdioManifestSchema = z
    .passthrough()
 
 export type McpStdioManifest = z.infer<typeof McpStdioManifestSchema>
-
-function jsonSchemaPropToZod(prop: any): ZodTypeAny {
-   if (!prop || typeof prop !== "object") return z.any()
-   switch (prop.type) {
-      case "string":
-         return z.string()
-      case "number":
-      case "integer":
-         return z.number()
-      case "boolean":
-         return z.boolean()
-      case "array":
-         return z.array(jsonSchemaPropToZod(prop.items))
-      default:
-         return z.any()
-   }
-}
-
-function jsonSchemaPropertiesToZodShape(
-   properties: Record<string, any> | undefined,
-): Record<string, ZodTypeAny> {
-   const shape: Record<string, ZodTypeAny> = {}
-   if (!properties) return shape
-   for (const [key, val] of Object.entries(properties)) {
-      shape[key] = jsonSchemaPropToZod(val)
-   }
-   return shape
-}
 
 export class McpStdioObject implements ResourceObject {
    readonly apiVersion = AGENT_API_VERSION
@@ -140,9 +113,7 @@ export class McpStdioObject implements ResourceObject {
          return {
             name: `${this.name}__${tool.name}`,
             intent: tool.description ?? "",
-            input: z.object(
-               jsonSchemaPropertiesToZodShape(inputSchema.properties),
-            ),
+            input: jsonSchemaObjectToZod(inputSchema),
          } as ToolGuide
       })
    }

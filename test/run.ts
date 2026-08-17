@@ -12,6 +12,7 @@ import "./hooks-guardrails.test"
 import "./state-tree.test"
 import "./mcp-deno-worker.test"
 import "./mcp-server.test"
+import "./mcp-direct.test"
 import { runAll } from "./runner.ts"
 
 runAll().catch((err) => {

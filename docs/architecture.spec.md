@@ -163,6 +163,7 @@ re-exporte ses types publics. Les extensions actuelles :
 |---|---|
 | `openai-completion` | Les kinds `OpenAIModel` / `OllamaModel` / `AzureFoundryModel` — fournisseurs du `ThreadCompletionService`. Partagent un `BaseModelObject` (build paresseux + cache du service). |
 | `mcp-stdio` | Kind `McpStdio` — serveur MCP sur transport stdio persistant. |
+| `mcp-direct` | Kind `McpDirect` — serveur MCP in-process : import dynamique d'un entry TypeScript exposant l'instance du serveur, relié au Client via une paire `InMemoryTransport` (zéro sous-processus/wire). |
 | `mcp-server` | Kind `McpServer` — serveur MCP distant (HTTP Streamable / SSE), avec auth `none` / `apiKey` / `oauth` (client_credentials). |
 | `mcp-deno-worker` | Kind exécutant un worker MCP Deno isolé. |
 | `memory` | Kind `Memory` — magasin clé/volatile volatile par contexte (Pattern A : l'état vit dans la Leaf, la ressource est stateless). |

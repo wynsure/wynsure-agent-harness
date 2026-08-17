@@ -4,19 +4,31 @@ import { logger } from "../../system/logger.ts"
 /**
  * Convert a JSON-Schema node into a Zod type. Recursive over `items` (arrays)
  * and `properties` (objects). Honours `enum`, `const`, `oneOf` / `anyOf` /
- * `allOf`, `required`, and a small set of `format`s. Local `$ref` ("#/.../path")
- * is resolved against the root schema passed at the top of the conversion.
- * Anything we do not recognize falls back to `z.any()` and emits a debug log
- * so missing constructs surface without breaking tool publication.
+ * `allOf`, `required`, `description`, and a small set of `format`s. Local
+ * `$ref` ("#/.../path") is resolved against the root schema passed at the top
+ * of the conversion. Anything we do not recognize falls back to `z.any()` and
+ * emits a debug log so missing constructs surface without breaking tool
+ * publication.
  *
- * Shared between McpStdio and McpDenoWorker: when a tool publishes a richer
- * input schema, the harness reconstructs a best-effort Zod shape that drives
- * selection-time validation and the `--deep` listing.
+ * Shared between McpStdio, McpDirect, McpServer and McpDenoWorker: when a tool
+ * publishes a richer input schema, the harness reconstructs a best-effort Zod
+ * shape that drives selection-time validation and the `--deep` listing.
  */
 export function jsonSchemaToZod(
     node: any,
     root: any = node,
     refStack: string[] = [],
+): ZodTypeAny {
+    const converted = convertJsonSchemaNode(node, root, refStack)
+    return typeof node.description === "string"
+        ? converted.describe(node.description)
+        : converted
+}
+
+function convertJsonSchemaNode(
+    node: any,
+    root: any,
+    refStack: string[],
 ): ZodTypeAny {
     if (!node || typeof node !== "object") return z.any()
 
@@ -58,6 +70,13 @@ export function jsonSchemaToZod(
 
     // enum (operates on the value regardless of `type`)
     if (Array.isArray(node.enum)) {
+        // All-string enums must become a native z.enum: the LLM-facing schema
+        // is re-serialized via toJSONSchema downstream, and z.enum is the only
+        // form that round-trips back to a JSON-Schema `enum` (a union of
+        // literals degrades to anyOf/const, which LLM APIs do not constrain).
+        if (node.enum.length > 0 && node.enum.every((v) => typeof v === "string")) {
+            return z.enum(node.enum as [string, ...string[]])
+        }
         const variants = node.enum.map((v) => (v === null ? z.null() : z.literal(v))) as any
         return variants.length === 1 ? variants[0] : z.union(variants)
     }

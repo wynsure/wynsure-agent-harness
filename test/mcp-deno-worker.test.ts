@@ -50,9 +50,16 @@ describe("mcp-deno-worker schema mapper", () => {
         assert(email.safeParse("a@b.com").success, "email validator accepts valid email")
     })
 
-    it("enum produces a union of literals", () => {
-        const u = jsonSchemaToZod({ type: "string", enum: ["a", "b", "c"] })
-        assert(u instanceof z.ZodUnion, "enum → z.union")
+    it("string enum maps to a native z.enum and round-trips to a JSON-Schema enum", () => {
+        const e = jsonSchemaToZod({ type: "string", enum: ["a", "b", "c"] })
+        assert(e instanceof z.ZodEnum, "string enum → z.enum")
+        const roundTrip = z.toJSONSchema(e as z.ZodType)
+        eq(roundTrip.enum, ["a", "b", "c"], "z.enum round-trips to a JSON-Schema enum")
+    })
+
+    it("mixed enum (non-string values) produces a union of literals", () => {
+        const u = jsonSchemaToZod({ enum: ["a", 42, null] })
+        assert(u instanceof z.ZodUnion, "mixed enum → z.union")
     })
 
     it("const produces a single literal", () => {

@@ -10,6 +10,7 @@
 // single package barrel (`src/index.ts`).
 export * from "./interact-surface/index.ts"
 export * from "./mcp-stdio/index.ts"
+export * from "./mcp-direct/index.ts"
 export * from "./mcp-deno-worker/index.ts"
 export * from "./mcp-server/index.ts"
 export * from "./memory/index.ts"
