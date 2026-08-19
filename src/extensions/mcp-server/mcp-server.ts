@@ -28,7 +28,8 @@ import { ClientCredentialsOAuthProvider } from "./oauth-provider.ts"
 
 /**
  * `McpServerSpec.auth` — discriminated union on `type`. `none` is the default
- * (anonymous server). `apiKey` sends a static bearer on every request.
+ * (anonymous server). `apiKey` sends a static header on every request
+ * (`Authorization: Bearer` by default, override with `headerName`).
  * `oauth` runs the OAuth 2.0 `client_credentials` grant against `tokenEndpoint`
  * at connection time and lets the SDK refresh it on `UnauthorizedError`.
  *
@@ -43,6 +44,7 @@ const ApiKeyAuthSchema = z
     .object({
         type: z.literal("apiKey"),
         token: z.string().min(1),
+        headerName: z.string().min(1).optional(),
     })
     .passthrough()
 
@@ -207,11 +209,13 @@ export class McpServerObject implements ResourceObject {
         if (auth.type === "none") return {}
         if (auth.type === "apiKey") {
             const token = renderConnField(auth.token, env)
-            return {
-                requestInit: {
-                    headers: { Authorization: `Bearer ${token}` },
-                },
-            }
+            const headerName = auth.headerName
+                ? renderConnField(auth.headerName, env)
+                : undefined
+            const headers: Record<string, string> = headerName
+                ? { [headerName]: token }
+                : { Authorization: `Bearer ${token}` }
+            return { requestInit: { headers } }
         }
         const provider = new ClientCredentialsOAuthProvider({
             clientId: renderConnField(auth.clientId, env),
@@ -348,7 +352,8 @@ spec:
             "spec.endpoint": "URL du endpoint MCP du serveur distant. Template `{{env.*}}` supporté.",
             "spec.auth": "Authentification : `none` (défaut), `apiKey` ou `oauth` (discriminé sur `type`).",
             "spec.auth.type": "Discriminant d'authentification (`none` | `apiKey` | `oauth`).",
-            "spec.auth.token": "Token bearer envoyé dans `Authorization`. Template `{{env.*}}` supporté.",
+            "spec.auth.token": "Token envoyé dans le header (bearer par défaut, ou brut si `headerName` est défini). Template `{{env.*}}` supporté.",
+            "spec.auth.headerName": "Nom du header HTTP (défaut `Authorization` avec préfixe `Bearer`). Utile pour APIM (`Ocp-Apim-Subscription-Key`). Template `{{env.*}}` supporté.",
             "spec.auth.clientId": "Identifiant client OAuth (grant `client_credentials`). Template `{{env.*}}` supporté.",
             "spec.auth.clientSecret": "Secret client OAuth. Template `{{env.*}}` supporté.",
             "spec.auth.tokenEndpoint": "URL du endpoint de token OAuth. Template `{{env.*}}` supporté.",
