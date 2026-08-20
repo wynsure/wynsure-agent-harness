@@ -29,8 +29,7 @@ import {
    type IThreadCompletionService,
    type TokenUsage,
 } from "./thread.ts"
-import { isDebugMode, writeTraceFile, logsDir, logger } from "../system/logger.ts"
-import { resolve } from "path"
+import { isDebugMode, writeTrace, logger } from "../system/logger.ts"
 import { stringify } from "yaml"
 import { AgentObject } from "./resources/agent.ts"
 import { PostureObject } from "./resources/posture.ts"
@@ -214,7 +213,6 @@ export class AgentContext {
      * See docs/architecture.spec.md § "ServiceContract".
     */
    private readonly completionService: IThreadCompletionService
-   readonly tracePath: string
    /**
     * Activity id root for fragments produced by the LLM (AgentMessage,
     * Thinking, Reference, ToolUse emitted by the provider, ToolFeedback
@@ -283,7 +281,6 @@ export class AgentContext {
        )
        this.modelActivityId = session.allocId("activity")
       this.harnessActivityId = session.allocId("activity")
-      this.tracePath = resolve(logsDir, session.sessionId, `${this.contextId}.yaml`)
       this.completionService = session.getService(
          this.agent.spec.model,
          ThreadCompletionService,
@@ -1445,7 +1442,7 @@ export class AgentContext {
          preview: shown,
       })
 
-      if (isDebugMode) {
+      if (isDebugMode()) {
          this.traceContextChange(f)
       }
    }
@@ -1506,6 +1503,6 @@ export class AgentContext {
          docs.push(toYamlDoc(f))
       }
 
-      writeTraceFile(this.tracePath, docs.join("\n") + "\n")
+      writeTrace(this.session.sessionId, this.contextId, docs.join("\n") + "\n")
    }
 }
