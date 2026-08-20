@@ -1,19 +1,22 @@
 import { z } from "zod"
-import {
-   type ResourceObject,
-   type ToolGuide,
-   type ToolName,
-   type GuardrailDecl,
-   type HookEntry,
-   type HookTrigger,
-} from "../../blueprint/blueprint.ts"
+import type {
+   ResourceObject,
+} from "../../runtime/resource.ts"
+import type {
+   ToolGuide,
+   ToolName,
+} from "../../runtime/tool.ts"
+import type {
+   GuardrailDecl,
+   HookEntry,
+   HookTrigger,
+} from "../../blueprint/blueprint-schema.ts"
 import {
    type ObjectManifest,
    type ObjectMeta,
-   type ObjectLoadContext,
-   scheme,
    ObjectMetaSchema,
 } from "../../blueprint/object-meta.ts"
+import { type ObjectLoadContext, scheme } from "../../runtime/scheme.ts"
 import type { AgentContext } from "../../runtime/context.ts"
 import type { ActivityId } from "../../state/activity.ts"
 import { AGENT_API_VERSION } from "../../blueprint/api-version.ts"
@@ -23,8 +26,7 @@ import { AGENT_API_VERSION } from "../../blueprint/api-version.ts"
  * resource is stateless (Pattern A): every value lives in the context's
  * `state` leaf, keyed by `kind = metadata.name`. Two contexts of the same
  * agent therefore hold independent stores, and two distinct Memory resources
- * no longer share one bag. See docs/state-tree.spec.md, docs/resources.spec.md
- * § "memory".
+ * no longer share one bag. See docs/architecture.spec.md, docs/resources.md.
  *
  * v1 exposes only `<name>__set` and `<name>__get`. Other operations
  * (delete / has / keys) can be added later without breaking the manifest.

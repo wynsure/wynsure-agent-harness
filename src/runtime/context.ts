@@ -17,12 +17,11 @@ import {
    createActivityProgress,
    createActivityComplete,
 } from "../state/fragment.ts"
-import {
-   type AgentBehavior,
-   type GuardrailDecl,
-   type ToolGuide,
-   type ToolName,
-} from "../blueprint/blueprint.ts"
+import type {
+   AgentBehavior,
+   ResourceObject,
+} from "./resource.ts"
+import type { ToolGuide, ToolName } from "./tool.ts"
 import {
    AgentThread,
    ThreadCompletionService,
@@ -33,10 +32,14 @@ import {
 import { isDebugMode, writeTraceFile, logsDir, logger } from "../system/logger.ts"
 import { resolve } from "path"
 import { stringify } from "yaml"
-import { AgentObject } from "../blueprint/resources/agent.ts"
-import { PostureObject } from "../blueprint/resources/posture.ts"
-import { SkillObject } from "../blueprint/resources/skill.ts"
-import type { HookEntry, GuardrailAppliesTo } from "../blueprint/blueprint-schema.ts"
+import { AgentObject } from "./resources/agent.ts"
+import { PostureObject } from "./resources/posture.ts"
+import { SkillObject } from "./resources/skill.ts"
+import type {
+   GuardrailDecl,
+   HookEntry,
+   GuardrailAppliesTo,
+} from "../blueprint/blueprint-schema.ts"
 import { labelSelectorMatches, type LabelSelector } from "../blueprint/object-meta.ts"
 import { evaluateCondition, renderTemplate } from "../blueprint/scripting.ts"
 import { type Activity, type ActivityChildSpec, type ActivityDelivery, type ActivityId, type EnvironmentName, type ToolUseId } from "../state/activity.ts"
@@ -47,7 +50,6 @@ import {
 } from "./steering.ts"
 import { type Tree, joinLeafPath } from "../state/tree.ts"
 import { type Cell, type Leaf, type StateCell } from "../state/leaf.ts"
-import { type ResourceObject } from "../blueprint/blueprint.ts"
 
 // ─── Activity-root selection ───────────────────────────────────────────────
 
@@ -208,8 +210,8 @@ export class AgentContext {
    /**
     * The thread completion service this context drives its run loop with.
     * Resolved eagerly (by contract) from the agent's declared model resource,
-    * so a missing or invalid model reference fails fast at session creation.
-    * See docs/resources.spec.md § "model — service de complétion".
+     * so a missing or invalid model reference fails fast at session creation.
+     * See docs/architecture.spec.md § "ServiceContract".
     */
    private readonly completionService: IThreadCompletionService
    readonly tracePath: string
@@ -226,10 +228,8 @@ export class AgentContext {
      * Activity audit, Subagent*). Filtered by the
      * provider as "context/audit" — never mapped as assistant messages.
      */
-    readonly harnessActivityId: ActivityId
-    /** Back-compat alias for `modelActivityId` (used to be the single root). */
-    get activityId(): ActivityId { return this.modelActivityId }
-    /** Backing token-usage state, persisted as cell `__tokenUsage`. */
+     readonly harnessActivityId: ActivityId
+     /** Backing token-usage state, persisted as cell `__tokenUsage`. */
     get tokenUsage(): TokenUsage {
        return (
           this.getIntrinsic<TokenUsage>("__tokenUsage") ?? {
@@ -284,7 +284,7 @@ export class AgentContext {
        this.modelActivityId = session.allocId("activity")
       this.harnessActivityId = session.allocId("activity")
       this.tracePath = resolve(logsDir, session.sessionId, `${this.contextId}.yaml`)
-      this.completionService = session.blueprint.getService(
+      this.completionService = session.getService(
          this.agent.spec.model,
          ThreadCompletionService,
       )
@@ -295,7 +295,7 @@ export class AgentContext {
    get posture(): PostureObject | null {
       const name = this.currentPosture
       if (name === null) return null
-      const res = this.session.blueprint.getResource(name)
+      const res = this.session.getResource(name)
       return res instanceof PostureObject ? res : null
    }
 
@@ -720,7 +720,7 @@ export class AgentContext {
     }
 
    private async activatePosture(postureName: string): Promise<void> {
-      const postureResource = this.session.blueprint.getResource(postureName)
+      const postureResource = this.session.getResource(postureName)
       if (!(postureResource instanceof PostureObject)) return
       await postureResource.applyTool(postureName, {}, this)
    }
@@ -766,7 +766,7 @@ export class AgentContext {
      * When `toolName` is provided (the tool-scoped triggers `on_tool_use` /
      * `on_tool_error`), each hook's optional `appliesTo` selector is matched
      * against it; a non-matching hook is filtered out. A hook without
-     * `appliesTo` always matches (back-compat). The selector reuses the
+     * `appliesTo` matches every tool. The selector reuses the
      * guardrail semantics (`"*"`, name list, or label selector on the
      * publishing resource).
      */
@@ -792,7 +792,7 @@ export class AgentContext {
           push(this.posture.name, this.posture.getHooks(trigger))
        }
        for (const name of this.activeSkillNames()) {
-          const res = this.session.blueprint.getResource(name)
+          const res = this.session.getResource(name)
           if (res instanceof SkillObject) {
              push(res.name, res.getHooks(trigger))
           }
@@ -843,7 +843,7 @@ export class AgentContext {
          push(this.posture.name, this.posture.getGuardrails())
       }
       for (const name of this.activeSkillNames()) {
-         const res = this.session.blueprint.getResource(name)
+         const res = this.session.getResource(name)
          if (res instanceof SkillObject) push(res.name, res.getGuardrails())
       }
       return out
@@ -918,7 +918,7 @@ export class AgentContext {
     * prefixed) matches wins. Used by the guardrail label selector.
     */
    private findToolPublisher(toolName: ToolName) {
-      for (const res of this.session.blueprint.resources) {
+      for (const res of this.session.resources) {
          for (const t of res.getTools()) {
             if (t.name === toolName || t.name === `${res.name}__${toolName}`) {
                return res
@@ -937,21 +937,21 @@ export class AgentContext {
       const tools: ToolGuide[] = []
       // Explicit selection model: a tool reaches the LLM surface only when
       // declared in the YAML, never by virtue of being loaded. Three channels:
-      //   1. the agent's permanent tooling (folded from its `extends` presets,
-      //      resolved against the blueprint — `toolset pattern/selector`,
-      //      `subagent`, etc.);
+       //   1. the agent's permanent tooling (folded from its `extends` presets,
+       //      resolved against the session's resources — `toolset
+       //      pattern/selector`, `subagent`, etc.);
       //   2. the active posture's tooling (resolved the same way);
       //   3. each attached skill's tooling.
       // McpStdio, Memory, and any other tool-publishing resource contribute
       // only when an entry selects them — there is no implicit aggregation
-      // of every resource's getTools(). See docs/resources.spec.md §
-      // "Surfaces d'outils".
+       // of every resource's getTools(). See docs/architecture.spec.md §
+       // "La surface d'outils, assemblée à l'instant t".
       tools.push(...this.agent.getTools())
       if (this.posture) {
          tools.push(...this.posture.getActiveTooling())
       }
       for (const name of this.activeSkillNames()) {
-         const res = this.session.blueprint.getResource(name)
+         const res = this.session.getResource(name)
          if (res instanceof SkillObject) {
             tools.push(...res.getActiveTooling())
          }
@@ -962,8 +962,8 @@ export class AgentContext {
    /**
     * State-Tree façade scoped to this context (rooted at `scopePath`).
     * Resources read/write their per-context state through these accessors;
-    * the `kind` of a state cell is the resource `metadata.name`. See
-    * docs/state-tree.spec.md.
+     * the `kind` of a state cell is the resource `metadata.name`. See
+     * docs/architecture.spec.md.
     */
    getState(rc: ResourceObject): StateCell | undefined {
       return this.stateLeaf().get(rc.name)
@@ -1008,7 +1008,7 @@ export class AgentContext {
     */
    memorySnapshot(): Record<string, unknown> {
       const merged: Record<string, unknown> = {}
-      for (const r of this.session.blueprint.resources) {
+      for (const r of this.session.resources) {
          if (r.kind !== "Memory") continue
          const bag = this.getState(r)?.payload as Record<string, unknown> | undefined
          if (bag) Object.assign(merged, bag)
@@ -1108,9 +1108,9 @@ export class AgentContext {
           if (guardrailErrors) {
              return this.failInline(parentRoot, id, toolName, { errors: guardrailErrors })
           }
-          // Pass the LLM-emitted toolName so hooks can filter via `appliesTo`
-          // (selector shape identical to guardrails). A hook without `appliesTo`
-          // still fires for every tool (back-compat).
+           // Pass the LLM-emitted toolName so hooks can filter via `appliesTo`
+           // (selector shape identical to guardrails). A hook without `appliesTo`
+           // fires for every tool.
           const hookFire = await this.fireHooks("on_tool_use", toolName)
          if (hookFire.errors && hookFire.errors.length > 0) {
             return this.failInline(parentRoot, id, toolName, { errors: hookFire.errors })
@@ -1311,7 +1311,7 @@ export class AgentContext {
        // surface (collectTools) but do not own tool execution: an agent's
        // `applyTool` is a no-op, and a posture's `getTools()` is empty by
        // design. Their `type: route` entries are resolved explicitly below.
-       for (const res of this.session.blueprint.resources) {
+       for (const res of this.session.resources) {
           if (res instanceof AgentObject || res instanceof PostureObject) continue
           const tools = res.getTools()
           const match = tools.find(
@@ -1322,12 +1322,12 @@ export class AgentContext {
           }
        }
 
-       const skillRes = this.session.blueprint.getResource(toolName)
+       const skillRes = this.session.getResource(toolName)
        if (skillRes instanceof SkillObject) {
           return { awaitedId: (await skillRes.applyTool(toolName, args, this, deliveryId)) ?? undefined }
        }
 
-       for (const res of this.session.blueprint.resources) {
+       for (const res of this.session.resources) {
           if (res instanceof PostureObject && res.resolveSkillTemplate(toolName)) {
              return { awaitedId: (await res.activateSkill(toolName, args, this, deliveryId)) ?? undefined }
           }
@@ -1341,7 +1341,7 @@ export class AgentContext {
        if (this.posture) {
           const target = this.posture.resolveRouteTarget(toolName)
           if (target) {
-             const targetResource = this.session.blueprint.getResource(target)
+             const targetResource = this.session.getResource(target)
              if (targetResource instanceof PostureObject) {
                 return { awaitedId: (await targetResource.applyTool(toolName, args, this, deliveryId)) ?? undefined }
              }
@@ -1354,7 +1354,7 @@ export class AgentContext {
        // the route.
        const agentTarget = this.agent.resolveRouteTarget(toolName)
        if (agentTarget) {
-          const targetResource = this.session.blueprint.getResource(agentTarget)
+          const targetResource = this.session.getResource(agentTarget)
           if (targetResource instanceof PostureObject) {
              return { awaitedId: (await targetResource.applyTool(toolName, args, this, deliveryId)) ?? undefined }
           }
@@ -1380,7 +1380,7 @@ export class AgentContext {
        deliveryId: ActivityId,
     ): Promise<void> {
       const agentId = toolName.replace(/^subagent_/, "")
-      const resource = this.session.blueprint.getResource(agentId)
+      const resource = this.session.getResource(agentId)
       if (!resource || !(resource instanceof AgentObject)) {
           this.deliver(deliveryId, { error: `Subagent not found: ${agentId}` }, true)
          return
@@ -1396,13 +1396,13 @@ export class AgentContext {
    }
 
    /**
-    * Spawns a child context bound to a subagent behavior, runs it
-    * autonomously, and returns the result to deliver on the parent thread.
-    * Emits SubagentSpawn before run and SubagentComplete after. The child
-    * inherits the session's blueprint resources and completion service but has
-    * its own thread, posture, and token usage. It may delegate activities to
-    * any environment registered on the session when its declared tooling
-    * surfaces such tools.
+     * Spawns a child context bound to a subagent behavior, runs it
+     * autonomously, and returns the result to deliver on the parent thread.
+     * Emits SubagentSpawn before run and SubagentComplete after. The child
+     * inherits the session's resource set and completion service but has
+     * its own thread, posture, and token usage. It may delegate activities to
+     * any environment registered on the session when its declared tooling
+     * surfaces such tools.
     */
    async runSubagent(
       agentId: string,

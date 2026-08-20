@@ -2,7 +2,7 @@
  * Steering: a proactive host injection into a context's thread to redirect the
  * agent. Unlike a delegated activity (agent-initiated via a tool) or activity
  * resolution, steering is decided and imposed by the host. See
- * docs/studio.spec.md § "Steering".
+ * docs/architecture.spec.md § "La boucle de run".
  *
  * The primitive lives on AgentSession/AgentContext; this module holds the
  * shared option shape and the busy error the host maps to HTTP 409.

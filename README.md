@@ -33,14 +33,15 @@ them up to three directory levels deep (skipping `node_modules`, `.git`,
 The fastest way to understand a blueprint is to `check` it. `check` parses the
 file, validates every resource against its schema, verifies instruction
 references, and prints an inventory: resources, labels, tooling entries, hooks,
-guardrails, plus the built-in `harness/` catalogue you are allowed to reference.
+guardrails.
 
 ```bash
 # light inspection (no network, no MCP connections)
 agent-blueprint check path/to/my.blueprint.yaml
 
-# deep inspection — fully loads the blueprint, connects McpStdio transports
-# and lists the exact tools each one publishes
+# deep inspection — instantiates the blueprint's resources (like a session
+# would), connects McpStdio transports and lists the exact tools each one
+# publishes
 agent-blueprint check path/to/my.blueprint.yaml --deep
 ```
 
@@ -86,6 +87,6 @@ agent-blueprint studio --port 3000
 - **[`docs/resources.md`](./docs/resources.md)** — the exhaustive field
   reference for every resource kind (also reproducible via
   `agent-blueprint docs`).
-
-Deeper design specifications (activities, hooks & guardrails, the studio
-protocol) live under the repository root [`docs/`](../../docs/) folder.
+- **[`docs/architecture.spec.md`](./docs/architecture.spec.md)** — the deeper
+  specification: layers, the manifest→object cycle, the activity model,
+  serialization.

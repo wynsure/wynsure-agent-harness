@@ -7,7 +7,7 @@ import { describe, it, assert, eq } from "./runner.ts"
 import { type IThreadCompletionService, type CompletionResult } from "../src/runtime/thread.ts"
 import { type Fragment, createAgentMessage } from "../src/state/fragment.ts"
 import { Blueprint } from "../src/blueprint/blueprint.ts"
-import { AgentObject, type AgentSpec } from "../src/blueprint/resources/index.ts"
+import { AgentObject, type AgentSpec } from "../src/runtime/resources/index.ts"
 import { AgentSession } from "../src/runtime/session.ts"
 import { SteeringBusyError } from "../src/runtime/steering.ts"
 import {
@@ -20,25 +20,34 @@ import {
 } from "./harness.ts"
 
 /** Build a session bound to a custom completion service (mirror of buildSession). */
-function buildSessionWith(completion: IThreadCompletionService): AgentSession {
-   const blueprint = new Blueprint()
-     const agent = new AgentObject(
-        { name: "test-agent" },
-        { instruction: { content: "You are a test agent." }, model: STUB_MODEL_NAME } as AgentSpec,
-         {
-            persona: { name: "test-agent", instruction: "You are a test agent." },
-            guidelines: [],
-            tooling: [],
-            onStartHooks: [],
-            onCompletionHooks: [],
-            onToolUseHooks: [],
-            onToolErrorHooks: [],
-            guardrails: [],
-         },
-      )
-    blueprint.resources.push(agent)
+async function buildSessionWith(completion: IThreadCompletionService): Promise<AgentSession> {
+    const blueprint = new Blueprint()
+    blueprint.addResource(
+       {
+          apiVersion: "test/v1",
+          kind: "Agent",
+          metadata: { name: "test-agent" },
+          spec: { instruction: { content: "You are a test agent." }, model: STUB_MODEL_NAME },
+       },
+       (m, ctx) =>
+          new AgentObject(
+             m.metadata,
+             m.spec as unknown as AgentSpec,
+             {
+                persona: { name: "test-agent", instruction: "You are a test agent." },
+                guidelines: [],
+                tooling: [],
+                onStartHooks: [],
+                onCompletionHooks: [],
+                onToolUseHooks: [],
+                onToolErrorHooks: [],
+                guardrails: [],
+             },
+             ctx.session,
+          ),
+    )
     injectStubModel(blueprint, completion)
-    return new AgentSession(blueprint)
+    return AgentSession.create(blueprint)
 }
 
 interface Deferred<T> {
@@ -89,9 +98,9 @@ class ControllableCompletionService implements IThreadCompletionService {
 
 describe("Steering", () => {
    it("idle steering (as=user) emits a UserMessage and runs a new turn", async () => {
-      const { session } = buildSession({
-         turns: [[createAgentMessage("greeting")]],
-      })
+       const { session } = await buildSession({
+          turns: [[createAgentMessage("greeting")]],
+       })
       const settled = waitForSettled(session)
       await session.execute()
       await settled
@@ -109,9 +118,9 @@ describe("Steering", () => {
    })
 
    it("idle steering (as=instruction) emits an Instruction tagged steering", async () => {
-      const { session } = buildSession({
-         turns: [[createAgentMessage("ok")]],
-      })
+       const { session } = await buildSession({
+          turns: [[createAgentMessage("ok")]],
+       })
       const settled1 = waitForSettled(session)
       await session.execute()
       await settled1
@@ -132,12 +141,12 @@ describe("Steering", () => {
          { kind: "blocking" },
          { kind: "immediate", fragments: [createAgentMessage("done")] },
       ])
-      const session = buildSessionWith(completion)
+       const session = await buildSessionWith(completion)
 
-      const exec = session.execute()
-      await completion.blockingStarted // completion #1 in flight
+       const exec = session.execute()
+       await completion.blockingStarted // completion #1 in flight
 
-      let threw: unknown
+       let threw: unknown
       try {
          session.steer("no interrupt")
       } catch (err) {
@@ -157,12 +166,12 @@ describe("Steering", () => {
          { kind: "blocking" }, // completion #1: will be aborted, never emits fragments
          { kind: "immediate", fragments: [createAgentMessage("recovered")] }, // completion #2
       ])
-      const session = buildSessionWith(completion)
+       const session = await buildSessionWith(completion)
 
-      const exec = session.execute()
-      await completion.blockingStarted // completion #1 in flight
+       const exec = session.execute()
+       await completion.blockingStarted // completion #1 in flight
 
-      session.steer("redirect", { interrupt: true })
+       session.steer("redirect", { interrupt: true })
       await exec
 
       const types = threadTypes(session)

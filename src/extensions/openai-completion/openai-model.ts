@@ -1,5 +1,6 @@
 import { z } from "zod"
-import { type ObjectLoadContext, scheme, ObjectMetaSchema } from "../../blueprint/object-meta.ts"
+import { ObjectMetaSchema } from "../../blueprint/object-meta.ts"
+import { type ObjectLoadContext, scheme } from "../../runtime/scheme.ts"
 import { type IThreadCompletionService } from "../../runtime/thread.ts"
 import {
    BaseModelObject,
@@ -43,7 +44,7 @@ export type OpenAIModelManifest = z.infer<typeof OpenAIModelManifestSchema>
  * OpenAIModel resource — provides a thread completion service backed by the
  * OpenAI Chat Completions API. Inline credentials (spec or `OPENAI_*`); for
  * managed-identity auth use `AzureFoundryModel` instead. Inert for the tool
- * surface. See docs/resources.spec.md § "Modèles".
+ * surface. See docs/resources.md.
  */
 export class OpenAIModelObject extends BaseModelObject<OpenAIModelSpec> {
    readonly apiVersion = AGENT_API_VERSION

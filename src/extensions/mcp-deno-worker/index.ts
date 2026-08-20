@@ -1,7 +1,8 @@
 // McpDenoWorker extension — publishes a `<name>__<tool>` surface driven by an
 // MCP client over a Deno Web Worker channel (`postMessage`). Connection is
-// established eagerly at load. The kind refuses to load under a non-Deno
-// parent runtime — there is no fallback transport in v1.
+// established eagerly at session instantiation. The kind refuses to
+// instantiate under a non-Deno parent runtime — there is no fallback
+// transport in v1.
 import "./mcp-deno-worker.ts"
 
 export {

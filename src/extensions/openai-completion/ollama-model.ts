@@ -1,5 +1,6 @@
 import { z } from "zod"
-import { type ObjectLoadContext, scheme, ObjectMetaSchema } from "../../blueprint/object-meta.ts"
+import { ObjectMetaSchema } from "../../blueprint/object-meta.ts"
+import { type ObjectLoadContext, scheme } from "../../runtime/scheme.ts"
 import { type IThreadCompletionService } from "../../runtime/thread.ts"
 import { BaseModelObject, env, OpenAIThreadCompletionService } from "./model-base.ts"
 import { AGENT_API_VERSION } from "../../blueprint/api-version.ts"

@@ -27,7 +27,7 @@ function findActivityId(session: AgentSession, environment: string): string | un
 describe("state tree — serialize / restore", () => {
    it("round-trips thread, posture and resource state through the Tree", async () => {
       const memory = new MemoryObject({ name: "mem" }, {})
-      const { session } = buildSession({ turns: [], resources: [memory] })
+      const { session } = await buildSession({ turns: [], resources: [memory] })
 
       // Populate the tree: a posture transition, a thread fragment, a Memory
       // resource state cell. All land in the root context's leaves.
@@ -41,7 +41,7 @@ describe("state tree — serialize / restore", () => {
 
       // Fresh blueprint (same agent + a fresh Memory resource) for restore.
       const memory2 = new MemoryObject({ name: "mem" }, {})
-      const fresh = buildSession({ turns: [], resources: [memory2] })
+      const fresh = await buildSession({ turns: [], resources: [memory2] })
 
       const restored = await AgentSession.restore(snap, fresh.session.blueprint)
       eq(restored.sessionId, session.sessionId, "restore preserves the session id")
@@ -62,7 +62,7 @@ describe("state tree — serialize / restore", () => {
    it("the root context's interact leaf round-trips presentation items", async () => {
       // The /interact projection is owned by the InteractSurface extension —
       // register one so fragment emission projects to the leaf.
-      const { session } = buildSession({
+      const { session } = await buildSession({
          turns: [],
          resources: [new InteractSurfaceObject({ name: "user" }, {})],
       })
@@ -74,7 +74,7 @@ describe("state tree — serialize / restore", () => {
       eq(before[0].kind, "presentation", "projected item is a presentation")
 
       const snap = session.serialize()
-      const fresh = buildSession({
+      const fresh = await buildSession({
          turns: [],
          resources: [new InteractSurfaceObject({ name: "user" }, {})],
       })
@@ -88,7 +88,7 @@ describe("state tree — serialize / restore", () => {
 
    it("a pending activity resumes across serialize/restore (no promise machinery)", async () => {
       // A turn that delegates to user-board and suspends mid-turn.
-      const { session } = buildSession({
+      const { session } = await buildSession({
          turns: [[createToolUse("u1", "interact__prompt", { message: "go ahead" })]],
          resources: [new InteractSurfaceObject({ name: "user" }, {})],
       })
@@ -101,7 +101,7 @@ describe("state tree — serialize / restore", () => {
       const snap = session.serialize()
 
       // Restore against a fresh blueprint whose model produces the resume turn.
-      const fresh = buildSession({
+      const fresh = await buildSession({
          turns: [[createAgentMessage("resumed after answer")]],
          resources: [new InteractSurfaceObject({ name: "user" }, {})],
       })

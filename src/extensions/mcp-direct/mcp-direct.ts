@@ -4,21 +4,24 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js"
 import { resolve } from "path"
 import { pathToFileURL } from "node:url"
 import { z } from "zod"
-import {
-   type ResourceObject,
-   type ToolGuide,
-   type ToolName,
-   type GuardrailDecl,
-   type HookEntry,
-   type HookTrigger,
-} from "../../blueprint/blueprint.ts"
+import type {
+   ResourceObject,
+} from "../../runtime/resource.ts"
+import type {
+   ToolGuide,
+   ToolName,
+} from "../../runtime/tool.ts"
+import type {
+   GuardrailDecl,
+   HookEntry,
+   HookTrigger,
+} from "../../blueprint/blueprint-schema.ts"
 import {
    type ObjectManifest,
    type ObjectMeta,
-   type ObjectLoadContext,
-   scheme,
    ObjectMetaSchema,
 } from "../../blueprint/object-meta.ts"
+import { type ObjectLoadContext, scheme } from "../../runtime/scheme.ts"
 import type { AgentContext } from "../../runtime/context.ts"
 import type { ActivityId } from "../../state/activity.ts"
 import { AGENT_API_VERSION } from "../../blueprint/api-version.ts"
@@ -215,9 +218,9 @@ export class McpDirectObject implements ResourceObject {
       ctx: ObjectLoadContext,
    ): Promise<McpDirectObject> {
       const obj = new McpDirectObject(manifest.metadata, manifest.spec, ctx.cwd)
-      // Eagerly link at load time — same contract as McpStdio: a missing
-      // entry, a bad export, or a broken module surfaces here (pointing at
-      // this resource), not later when a tool call first runs.
+       // Eagerly link at session instantiation — same contract as McpStdio: a
+       // missing entry, a bad export, or a broken module surfaces here
+       // (pointing at this resource), not later when a tool call first runs.
       await obj["ensureConnected"]()
       return obj
    }
@@ -289,7 +292,7 @@ scheme.register({
    factory: McpDirectObject.fromManifest,
    metadata: {
       role: "Source d'outils MCP in-process : import dynamique d'un point d'entrée TypeScript qui expose l'instance du serveur, sans sous-processus ni transport réseau.",
-      surface: "Permanent (lien in-process établi au load)",
+       surface: "Permanent (lien in-process établi à l'instanciation de session)",
       example: `apiVersion: agent/v1
 kind: McpDirect
 metadata:

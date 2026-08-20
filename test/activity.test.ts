@@ -34,7 +34,7 @@ function findActivityId(session: AgentSession, environment: string): string | un
 
 describe("Activity execution", () => {
    it("direct tool returns ToolResult and emits ToolFeedback immediately", async () => {
-      const { session, completion } = buildSession({
+      const { session, completion } = await buildSession({
          turns: [
             [createToolUse("u1", "echo__say", { message: "hi" })],
             [createAgentMessage("done")],
@@ -56,7 +56,7 @@ describe("Activity execution", () => {
    })
 
    it("delegated tool creates an Activity, resolved feedback resumes the loop", async () => {
-      const { session, completion } = buildSession({
+      const { session, completion } = await buildSession({
          turns: [
             [createToolUse("u1", "test-worker__delegate_task", { task: "x" })],
             [createAgentMessage("done")],
@@ -93,7 +93,7 @@ describe("Activity execution", () => {
    })
 
    it("batch: multiple delegated tools resume only after all resolve", async () => {
-      const { session } = buildSession({
+      const { session } = await buildSession({
          turns: [
             [
                createToolUse("u1", "test-worker__delegate_task", { task: "a" }),
@@ -131,7 +131,7 @@ describe("Activity execution", () => {
    })
 
    it("progress: intermediate feedback emits ActivityProgress fragments", async () => {
-      const { session } = buildSession({
+      const { session } = await buildSession({
          turns: [
             [createToolUse("u1", "test-worker__delegate_task", { task: "x" })],
             [createAgentMessage("done")],
@@ -156,7 +156,7 @@ describe("Activity execution", () => {
    })
 
     it("user-board interaction: a delegating tool delegates and is resolved out of band", async () => {
-       const { session } = buildSession({
+       const { session } = await buildSession({
           turns: [
              [createToolUse("u1", "interact__ask", { question: "name?" })],
              [createAgentMessage("thanks")],
@@ -192,7 +192,7 @@ describe("Activity execution", () => {
        // Regression: activity_resolved must carry the CHILD activity id (the one
        // ActivityStart emits and the host resolves), not the internal delivery
        // id — otherwise the host-side Interaction card never updates.
-       const { session } = buildSession({
+       const { session } = await buildSession({
           turns: [
              [createToolUse("u1", "interact__ask", { question: "name?" })],
              [createAgentMessage("thanks")],
@@ -221,7 +221,7 @@ describe("Activity execution", () => {
     })
 
     it("interact__prompt resolution emits a UserMessage carrying the user's text", async () => {
-      const { session } = buildSession({
+      const { session } = await buildSession({
          turns: [
             [createToolUse("u1", "interact__prompt", { message: "go ahead" })],
             [createAgentMessage("got it")],
@@ -258,7 +258,7 @@ describe("Activity execution", () => {
    })
 
     it("failed activity: unregistered environment yields an error ToolFeedback", async () => {
-       const { session } = buildSession({
+       const { session } = await buildSession({
           turns: [
              [createToolUse("u1", "test-worker__delegate_task", { task: "x" })],
              [createAgentMessage("recovered")],

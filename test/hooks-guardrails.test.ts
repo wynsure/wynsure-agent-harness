@@ -1,6 +1,6 @@
 /**
  * Runtime scenarios for the hooks + guardrails overlay. See
- * docs/hooks-guardrails.spec.md. Blueprints are built from inline descriptors
+ * docs/architecture.spec.md. Blueprints are built from inline descriptors
  * so the schema + loader + behavior merge + hook fire + guardrail gate are
  * exercised end-to-end against a scripted completion service.
  */
@@ -11,9 +11,11 @@ import {
    CaptureEnvironment,
    stampDefaultModel,
    injectStubModel,
+   pushResourceObject,
    waitForSettled,
 } from "./harness.ts"
-import { createBlueprintFrom, type Blueprint } from "../src/blueprint/blueprint.ts"
+import { createBlueprintFrom } from "../src/runtime/loader.ts"
+import type { Blueprint } from "../src/blueprint/blueprint.ts"
 import { AgentSession } from "../src/runtime/session.ts"
 import {
    createToolUse,
@@ -23,7 +25,7 @@ import {
 } from "../src/state/fragment.ts"
 
 // Ensure every core resource loader (agent/posture/preset/skill) is registered.
-import "../src/blueprint/resources"
+import "../src/runtime/resources"
 // Ensure every pluggable resource loader (memory/interact-surface/openai-
 // completion/mcp-stdio) is registered too — the harness.ts stub model extends
 // BaseModelObject from extensions/openai-completion.
@@ -34,12 +36,12 @@ async function buildFromManifestsAsync(
    turns: import("../src/fragment").Fragment[][] = [],
    extra?: (bp: Blueprint) => void,
 ): Promise<{ session: AgentSession; blueprint: Blueprint; completion: ScriptedCompletionService }> {
-   stampDefaultModel(manifests)
-    const blueprint = await createBlueprintFrom(manifests as any, ".")
-    extra?.(blueprint)
-    const completion = new ScriptedCompletionService(turns)
-    injectStubModel(blueprint, completion)
-    const session = new AgentSession(blueprint)
+    stampDefaultModel(manifests)
+     const blueprint = createBlueprintFrom(manifests as any, ".")
+     extra?.(blueprint)
+     const completion = new ScriptedCompletionService(turns)
+     injectStubModel(blueprint, completion)
+     const session = await AgentSession.create(blueprint)
     // A passive user-board capturer stands in for a host that resolves
     // interaction activities out of band.
     session.registerEnvironment(new CaptureEnvironment("user-board"))
@@ -95,7 +97,7 @@ describe("hook fire — tooluse", () => {
             },
          ],
          [[createAgentMessage("hello")]],
-         (bp) => bp.resources.push(new DirectEchoObject()),
+         (bp) => pushResourceObject(bp, new DirectEchoObject()),
       )
 
       const ends = captureToolEnds(session)
@@ -194,7 +196,7 @@ describe("on_tool_error trigger", () => {
             [createToolUse("u1", "echo__missing", {})], // unknown subtool → isError
             [createAgentMessage("retrying")],
          ],
-         (bp) => bp.resources.push(new DirectEchoObject()),
+         (bp) => pushResourceObject(bp, new DirectEchoObject()),
       )
 
       const ends = captureToolEnds(session)
@@ -237,7 +239,7 @@ describe("guardrails — pre-execution gate", () => {
       const { session } = await buildFromManifestsAsync(
          guardrailBlueprint(["echo__say"], "args.message !== 'forbidden'", "Forbidden message"),
          [[createToolUse("u1", "echo__say", { message: "forbidden" })]],
-         (bp) => bp.resources.push(new DirectEchoObject()),
+         (bp) => pushResourceObject(bp, new DirectEchoObject()),
       )
 
       const settled = waitForSettled(session)
@@ -258,7 +260,7 @@ describe("guardrails — pre-execution gate", () => {
       const { session } = await buildFromManifestsAsync(
          guardrailBlueprint(["echo__say"], "args.message !== 'forbidden'"),
          [[createToolUse("u1", "echo__say", { message: "ok" })]],
-         (bp) => bp.resources.push(new DirectEchoObject()),
+         (bp) => pushResourceObject(bp, new DirectEchoObject()),
       )
 
       const settled = waitForSettled(session)
@@ -278,7 +280,7 @@ describe("guardrails — pre-execution gate", () => {
       const { session } = await buildFromManifestsAsync(
          guardrailBlueprint("*", "false", "denied"),
          [[createToolUse("u1", "echo__say", {})]],
-         (bp) => bp.resources.push(new DirectEchoObject()),
+         (bp) => pushResourceObject(bp, new DirectEchoObject()),
       )
 
       const settled = waitForSettled(session)
@@ -298,7 +300,7 @@ describe("guardrails — pre-execution gate", () => {
       const { session } = await buildFromManifestsAsync(
          guardrailBlueprint(["echo__other"], "false", "denied"),
          [[createToolUse("u1", "echo__say", { message: "x" })]],
-         (bp) => bp.resources.push(new DirectEchoObject()),
+         (bp) => pushResourceObject(bp, new DirectEchoObject()),
       )
 
       const settled = waitForSettled(session)
@@ -343,7 +345,7 @@ describe("guardrails — pre-execution gate", () => {
             },
          ],
          [[createToolUse("u1", "echo__say", { message: "x" })]],
-         (bp) => bp.resources.push(new DirectEchoObject()),
+         (bp) => pushResourceObject(bp, new DirectEchoObject()),
       )
 
       const settled = waitForSettled(session)
@@ -390,7 +392,7 @@ describe("on_tool_use hook — pre-execution via hook", () => {
             },
          ],
          [[createToolUse("u1", "echo__say", { message: "forbidden" })]],
-         (bp) => bp.resources.push(new DirectEchoObject({ failOn: "block" })),
+         (bp) => pushResourceObject(bp, new DirectEchoObject({ failOn: "block" })),
       )
 
       const ends = captureToolEnds(session)

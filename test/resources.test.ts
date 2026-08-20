@@ -1,6 +1,6 @@
 /**
  * Runtime scenarios for the `preset` and `skill` resources (see
- * docs/resources.spec.md). Blueprints are built from inline descriptors so the
+ * docs/resources.md). Blueprints are built from inline descriptors so the
  * schema + loader + `extends` merge + activation lifecycle are exercised
  * end-to-end against a scripted completion service.
  */
@@ -11,17 +11,19 @@ import {
    CaptureEnvironment,
    stampDefaultModel,
    injectStubModel,
+   pushResourceObject,
    waitForSettled,
    threadTypes,
 } from "./harness.ts"
-import { createBlueprintFrom, type Blueprint } from "../src/blueprint/blueprint.ts"
+import { createBlueprintFrom } from "../src/runtime/loader.ts"
+import type { Blueprint } from "../src/blueprint/blueprint.ts"
 import { AgentSession } from "../src/runtime/session.ts"
-import { PostureObject, SkillObject, AgentObject } from "../src/blueprint/resources/index.ts"
+import { PostureObject, SkillObject, AgentObject } from "../src/runtime/resources/index.ts"
 import { InteractSurfaceObject, InteractSurfaceManifestSchema } from "../src/extensions/interact-surface/index.ts"
 import { createToolUse, createAgentMessage, type InstructionFragment } from "../src/state/fragment.ts"
 
 // Ensure every core resource loader (agent/posture/preset/skill) is registered.
-import "../src/blueprint/resources"
+import "../src/runtime/resources"
 // Ensure every pluggable resource loader (memory/interact-surface/openai-
 // completion/mcp-stdio) is registered too — the harness.ts stub model extends
 // BaseModelObject from extensions/openai-completion.
@@ -33,14 +35,14 @@ async function buildFromManifestsAsync(
    turns: import("../src/fragment").Fragment[][] = [],
    extra?: (bp: Blueprint) => void,
 ): Promise<{ session: AgentSession; blueprint: Blueprint; completion: ScriptedCompletionService }> {
-   stampDefaultModel(manifests)
-    const blueprint = await createBlueprintFrom(manifests as any, ".")
-    extra?.(blueprint)
-    const completion = new ScriptedCompletionService(turns)
-    injectStubModel(blueprint, completion)
-    const session = new AgentSession(blueprint)
-    session.registerEnvironment(new CaptureEnvironment("user-board"))
-    return { session, blueprint, completion }
+    stampDefaultModel(manifests)
+     const blueprint = createBlueprintFrom(manifests as any, ".")
+     extra?.(blueprint)
+     const completion = new ScriptedCompletionService(turns)
+     injectStubModel(blueprint, completion)
+     const session = await AgentSession.create(blueprint)
+     session.registerEnvironment(new CaptureEnvironment("user-board"))
+     return { session, blueprint, completion }
 }
 
 describe("preset resource", () => {
@@ -78,7 +80,7 @@ describe("preset resource", () => {
    })
 
    it("posture `extends` a preset: preset tooling is merged into the posture", async () => {
-      const { blueprint } = await buildFromManifestsAsync([
+      const { session } = await buildFromManifestsAsync([
          {
             apiVersion: "agent/v1",
             kind: "Agent",
@@ -103,7 +105,7 @@ describe("preset resource", () => {
          },
       ])
 
-      const posture = blueprint.getResource("p") as PostureObject
+      const posture = session.getResource("p") as PostureObject
       assert(posture instanceof PostureObject, "posture object exists")
       const guides = posture.getActiveTooling().map((g) => g.name)
       assert(
@@ -113,7 +115,7 @@ describe("preset resource", () => {
    })
 
    it("agent `extends` a preset: preset tooling becomes the agent's permanent surface", async () => {
-      const { blueprint } = await buildFromManifestsAsync([
+      const { session } = await buildFromManifestsAsync([
          {
             apiVersion: "agent/v1",
             kind: "Preset",
@@ -130,7 +132,7 @@ describe("preset resource", () => {
           },
       ])
 
-      const agent = blueprint.getResource("a") as AgentObject
+      const agent = session.getResource("a") as AgentObject
       assert(agent instanceof AgentObject, "agent object exists")
       const guides = agent.getTools().map((g) => g.name)
       assert(
@@ -162,7 +164,7 @@ describe("preset resource", () => {
        // There is no virtual `harness` resource anymore. A toolset resolves
        // lazily (when the posture's tooling is collected); an undeclared
        // resource throws at that point.
-       const { blueprint } = await buildFromManifestsAsync([
+       const { session } = await buildFromManifestsAsync([
           {
              apiVersion: "agent/v1",
              kind: "Agent",
@@ -179,7 +181,7 @@ describe("preset resource", () => {
              },
           },
        ])
-       const posture = blueprint.getResource("p") as PostureObject
+       const posture = session.getResource("p") as PostureObject
        let threw: unknown
        try {
           posture.getActiveTooling()
@@ -196,7 +198,7 @@ describe("preset resource", () => {
     it("no reserved namespace: a Preset named harness/* loads like any other", async () => {
        // The reserved harness/ namespace guard is gone with the builtin
        // catalogue. A user Preset under that prefix now loads normally.
-       const { blueprint } = await buildFromManifestsAsync([
+       const { session } = await buildFromManifestsAsync([
           {
              apiVersion: "agent/v1",
              kind: "Preset",
@@ -210,7 +212,7 @@ describe("preset resource", () => {
              spec: { extends: ["harness/impostor"], instruction: { content: "You are A." } },
           },
        ])
-       const agent = blueprint.getResource("a") as AgentObject
+       const agent = session.getResource("a") as AgentObject
        assert(
           (agent as any).status.mergedFrom.includes("harness/impostor"),
           "preset under the former reserved prefix is merged normally",
@@ -323,7 +325,7 @@ describe("skill resource", () => {
              [createToolUse("u1", "audit", {})],
              [createAgentMessage("done")],
           ],
-          (bp) => bp.resources.push(new DirectEchoObject()),
+          (bp) => pushResourceObject(bp, new DirectEchoObject()),
       )
 
       const ends: Array<{ toolName: string }> = []
@@ -353,7 +355,7 @@ describe("skill resource", () => {
     })
 
    it("legacy inline skill: toolset tools <ref>/* falls back to an instruction template", async () => {
-      const { blueprint } = await buildFromManifestsAsync([
+      const { session } = await buildFromManifestsAsync([
          {
             apiVersion: "agent/v1",
             kind: "Agent",
@@ -370,20 +372,20 @@ describe("skill resource", () => {
             },
          },
       ])
-      // No skill object named "legacy_skill.md": the resource part of the
-      // pattern resolves to a plain instruction template registered on the
-      // collection.
-      blueprint.instructions.add("legacy_skill.md", {
-         name: "legacy",
-         description: "a legacy inline skill",
-         instruction: "legacy body",
-      })
+       // No skill object named "legacy_skill.md": the resource part of the
+       // pattern resolves to a plain instruction template registered on the
+       // collection.
+       session.blueprint.instructions.add("legacy_skill.md", {
+          name: "legacy",
+          description: "a legacy inline skill",
+          instruction: "legacy body",
+       })
 
-      const posture = blueprint.getResource("p") as PostureObject
-      const guides = posture.getActiveTooling().map((g) => g.name)
-      assert(guides.includes("legacy"), "legacy inline skill exposed by template name")
-      const skillRes = blueprint.getResource("legacy")
-      assert(!(skillRes instanceof SkillObject), "no skill object shadowed the legacy ref")
+       const posture = session.getResource("p") as PostureObject
+       const guides = posture.getActiveTooling().map((g) => g.name)
+       assert(guides.includes("legacy"), "legacy inline skill exposed by template name")
+       const skillRes = session.getResource("legacy")
+       assert(!(skillRes instanceof SkillObject), "no skill object shadowed the legacy ref")
    })
 })
 
@@ -538,7 +540,7 @@ describe("agent route dispatch (permanent)", () => {
 
 describe("toolset tools selection", () => {
    it("tools <name>/* selects all tools published by the named resource", async () => {
-      const { blueprint } = await buildFromManifestsAsync([
+      const { session } = await buildFromManifestsAsync([
          {
             apiVersion: "agent/v1",
             kind: "Agent",
@@ -561,13 +563,13 @@ describe("toolset tools selection", () => {
             spec: {},
          },
       ])
-      const posture = blueprint.getResource("p") as PostureObject
+      const posture = session.getResource("p") as PostureObject
       const names = posture.getActiveTooling().map((g) => g.name).sort()
       eq(names.join(","), "convo__get,convo__set", "all tools from `convo` selected via wildcard")
    })
 
    it("tools <name>/set,get filters by short suffix", async () => {
-      const { blueprint } = await buildFromManifestsAsync([
+      const { session } = await buildFromManifestsAsync([
          {
             apiVersion: "agent/v1",
             kind: "Agent",
@@ -590,14 +592,14 @@ describe("toolset tools selection", () => {
             spec: {},
          },
       ])
-      const posture = blueprint.getResource("p") as PostureObject
+      const posture = session.getResource("p") as PostureObject
       const names = posture.getActiveTooling().map((g) => g.name)
       eq(names.length, 1, "only one tool selected")
       eq(names[0], "convo__set", "selected by short suffix `set` resolves to `convo__set`")
    })
 
    it("tools referencing an unknown resource throws at resolve time", async () => {
-      const { blueprint } = await buildFromManifestsAsync([
+      const { session } = await buildFromManifestsAsync([
          {
             apiVersion: "agent/v1",
             kind: "Agent",
@@ -614,7 +616,7 @@ describe("toolset tools selection", () => {
             },
          },
       ])
-      const posture = blueprint.getResource("p") as PostureObject
+      const posture = session.getResource("p") as PostureObject
       let threw: unknown
       try {
          posture.getActiveTooling()
@@ -629,7 +631,7 @@ describe("toolset tools selection", () => {
    })
 
     it("tools accepts a list of patterns and aggregates them in order", async () => {
-       const { blueprint } = await buildFromManifestsAsync([
+       const { session } = await buildFromManifestsAsync([
           {
              apiVersion: "agent/v1",
              kind: "Agent",
@@ -656,8 +658,8 @@ describe("toolset tools selection", () => {
                 ],
              },
           },
-       ], [], (bp) => bp.resources.push(new DirectEchoObject()))
-       const posture = blueprint.getResource("p") as PostureObject
+        ], [], (bp) => pushResourceObject(bp, new DirectEchoObject()))
+       const posture = session.getResource("p") as PostureObject
        const names = posture.getActiveTooling().map((g) => g.name).sort()
        eq(names.join(","), "echo__say,memory__get", "list form aggregates all sources in declaration order")
     })
@@ -743,7 +745,7 @@ describe("memory resource", () => {
       eq(getFeedback.result.value.v, 42, "get returns the stored value")
 
       // And the store itself reflects the write.
-      const convo = session.blueprint.getResource("convo")!
+       const convo = session.getResource("convo")!
       const cell = session.context.getState(convo)
       eq((cell?.payload as Record<string, { v: number }> | undefined)?.k?.v, 42, "store reflects the write")
    })
@@ -841,6 +843,51 @@ describe("memory resource", () => {
       const surfaceAfter = withSelection.session.context.availableToolNames()
       assert(surfaceAfter.includes("convo__set"), "convo__set exposed once selected")
       assert(surfaceAfter.includes("convo__get"), "convo__get exposed once selected")
+   })
+})
+
+describe("blueprint ↔ session boundary", () => {
+   it("one blueprint serves many sessions; live objects are instantiated per session", async () => {
+      const manifests = [
+         {
+            apiVersion: "agent/v1",
+            kind: "Agent",
+            metadata: { name: "a" },
+            spec: { instruction: { content: "You are A." } },
+         },
+         {
+            apiVersion: "agent/v1",
+            kind: "Memory",
+            metadata: { name: "convo" },
+            spec: {},
+         },
+      ]
+      stampDefaultModel(manifests)
+      const blueprint = createBlueprintFrom(manifests as any, ".")
+      injectStubModel(blueprint, new ScriptedCompletionService([]))
+      const s1 = await AgentSession.create(blueprint)
+      const s2 = await AgentSession.create(blueprint)
+
+      // The blueprint stays declarative: descriptors are shared and untouched.
+      eq(blueprint.descriptors.length, 3, "descriptors recorded (agent + memory + stub model)")
+      eq(
+         s1.blueprint,
+         s2.blueprint,
+         "both sessions point at the same shared blueprint",
+      )
+
+       // Each session gets its own live objects: no transport, status or
+       // state is ever shared between sessions of one blueprint.
+       assert(s1.resources !== s2.resources, "per-session resource arrays")
+       assert(s1.tree !== s2.tree, "per-session trees")
+       const m1 = s1.getResource("convo")
+       const m2 = s2.getResource("convo")
+      assert(!!m1 && !!m2 && m1 !== m2, "live resource objects are distinct per session")
+      eq(
+         JSON.stringify(m1!.toManifest()),
+         JSON.stringify(m2!.toManifest()),
+         "both instantiated from the same shared descriptor",
+      )
    })
 })
 

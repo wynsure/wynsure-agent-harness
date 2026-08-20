@@ -1,7 +1,10 @@
 import { EventEmitter } from "events"
-import { type Blueprint, type ResourceObject } from "../blueprint/blueprint.ts"
+import { type Blueprint } from "../blueprint/blueprint.ts"
+import { type PresetView, type ResourceObject } from "./resource.ts"
 import { AgentContext } from "./context.ts"
-import { AgentObject } from "../blueprint/resources/agent.ts"
+import { AgentObject } from "./resources/agent.ts"
+import { type ObjectFactory, type ObjectLoadContext, scheme } from "./scheme.ts"
+import type { ServiceContract } from "../blueprint/service.ts"
 import { type Fragment } from "../state/fragment.ts"
 import { type TokenUsage } from "./thread.ts"
 import { Tree, joinLeafPath, SESSION_SCOPE_PATH, type TreeSnapshot } from "../state/tree.ts"
@@ -63,202 +66,280 @@ export type SessionEvent =
 
 /**
  * AgentSession owns the event emitter, the agent identity, the environment
- * registry, and the contexts. Activities live as DATA — cells in each context's
- * /activities leaf — so the session's only activity-side role is to route host
- * resolution (`resolveActivity`/`failActivity`) to the owning context, which
- * settles it synchronously. There is no in-memory activity store, no await
- * graph, no watcher map, and no promise-based resume: the host re-calls
- * `execute()` to continue after a resolution. All execution is delegated to the
- * AgentContext.
+ * registry, the contexts — and the live resources. Resources are instantiated
+ * per session from the blueprint's descriptors (`AgentSession.create`): two
+ * sessions built from the same blueprint share the descriptors and the cached
+ * instruction templates, never the live objects (transports, workers, status).
+ * Resource objects point at their session, the session points at the
+ * blueprint; there is no intermediate owner.
+ *
+ * Activities live as DATA — cells in each context's /activities leaf — so the
+ * session's only activity-side role is to route host resolution
+ * (`resolveActivity`/`failActivity`) to the owning context, which settles it
+ * synchronously. There is no in-memory activity store, no await graph, no
+ * watcher map, and no promise-based resume: the host re-calls `execute()` to
+ * continue after a resolution. All execution is delegated to the AgentContext.
  */
 export class AgentSession {
    readonly blueprint: Blueprint
-   readonly context: AgentContext
+   /** Live resource objects of THIS session, in blueprint declaration order. */
+   readonly resources: ResourceObject[] = []
     readonly events = new EventEmitter()
-    readonly agentName: string
-    readonly sessionId: SessionId
-   /** One Tree per session; the serializable unit for snapshot/restore. */
-   readonly tree: Tree = new Tree()
+    /** One Tree per session; the serializable unit for snapshot/restore. */
+    readonly tree: Tree = new Tree()
     private idCounter = 0
-   private readonly contexts = new Map<string, AgentContext>()
-   private readonly environments = new Map<EnvironmentName, ActivityEnvironment>()
+    private readonly contexts = new Map<string, AgentContext>()
+    private readonly environments = new Map<EnvironmentName, ActivityEnvironment>()
+   // Assigned by `create` once the resources exist and the agent is resolved:
+   // factories run before the agent is known, and none of them reads these.
+   private _agentName!: string
+   private _sessionId!: SessionId
+   private _context!: AgentContext
 
-   constructor(
-      blueprint: Blueprint,
-      agentName?: string,
-   ) {
-      this.blueprint = blueprint
-      const name = agentName ?? pickDefaultAgent(blueprint)
-      const resource = blueprint.getResource(name)
-      if (!resource) {
+   get agentName(): string { return this._agentName }
+   get sessionId(): SessionId { return this._sessionId }
+   get context(): AgentContext { return this._context }
+
+    private constructor(blueprint: Blueprint) {
+       this.blueprint = blueprint
+   }
+
+   getResource(name: string): ResourceObject | undefined {
+      return this.resources.find((r) => r.name === name)
+   }
+
+   /**
+    * Resolve a typed service contract from the named resource. Throws if the
+    * resource is missing or does not provide the contract. The single path for
+    * any capability exposed via `ResourceObject.getService` (see
+     * docs/architecture.spec.md § "ServiceContract").
+    */
+   getService<T>(name: string, contract: ServiceContract<T>): T {
+      const res = this.getResource(name)
+      if (!res) {
+         throw new Error(`Resource "${name}" not found.`)
+      }
+      const svc = res.getService?.(contract)
+      if (!svc) {
+         throw new Error(
+            `Resource "${name}" (kind ${res.kind}) does not provide service "${contract.id}".`,
+         )
+      }
+      return svc
+   }
+
+    /**
+     * Instantiate the blueprint's resources into this session, then finish
+     * its construction. The session exists before its resources (factories
+     * receive it as their load context and store it as their back-reference —
+     * nothing reads agent identity or contexts at factory time). Each
+     * descriptor passes through its factory (the descriptor's override, else
+     * the scheme lookup); factories connect eagerly — a broken MCP entry
+     * fails here, pointing at the session creation, not at a first tool call.
+     * Then `extends` presets are merged, the agent is resolved, the root
+     * context is constructed, and every resource receives `bindToSession` —
+     * the seam extensions use to subscribe to fragment/activity events and
+     * acquire their own leaves on the tree. The core itself does not hard-wire
+     * any user-facing projection — extensions own theirs.
+     */
+    static async create(
+       blueprint: Blueprint,
+       agentName?: string,
+    ): Promise<AgentSession> {
+       const session = new AgentSession(blueprint)
+       const ctx: ObjectLoadContext = {
+          cwd: blueprint.instructions.cwd,
+          session,
+      }
+      for (const descriptor of blueprint.descriptors) {
+         const factory =
+            (descriptor.factory as ObjectFactory | undefined) ??
+            scheme.lookup(descriptor.manifest.apiVersion, descriptor.manifest.kind)
+               ?.factory
+         if (!factory) {
+            throw new Error(
+               `No factory registered for kind "${descriptor.manifest.apiVersion}/${descriptor.manifest.kind}"`,
+            )
+         }
+         session.resources.push((await factory(descriptor.manifest, ctx)) as ResourceObject)
+      }
+      resolveExtends(session.resources)
+
+      const name = agentName ?? pickDefaultAgent(session.resources)
+      const res = session.getResource(name)
+      if (!res) {
          throw new Error(`Agent resource not found: "${name}".`)
       }
-      if (!(resource instanceof AgentObject)) {
+      if (!(res instanceof AgentObject)) {
          throw new Error(`Resource "${name}" is not an agent.`)
       }
-       this.agentName = name
-       this.sessionId = `${this.agentName}-${timecode()}`
-       this.context = new AgentContext(this, { agent: resource })
-       // Bind every resource to the live session AFTER the root context exists:
-       // extensions use this seam to subscribe to fragment/activity events and
-       // acquire their own leaves on the tree. The core itself does not
-       // hard-wire any user-facing projection — extensions own theirs.
-       for (const res of blueprint.resources) {
-          res.bindToSession?.(this)
-       }
-    }
-
-   /** Allocate a session-unique identifier with the given label prefix. */
-   allocId(prefix: string): string {
-      return `${this.agentName}-${prefix}-${this.idCounter++}`
-   }
-
-   registerContext(ctx: AgentContext): void {
-      this.contexts.set(ctx.contextId, ctx)
-   }
-
-   getContext(contextId: string): AgentContext | undefined {
-      return this.contexts.get(contextId)
-   }
-
-   listContexts(): AgentContext[] {
-      return [...this.contexts.values()]
-   }
-
-   // ── State-Tree façade (session scope) ──────────────────────────────
-
-   /**
-    * Session-scoped state accessors, rooted at the reserved `/.session` path.
-    * Resources that carry session-level (cross-context) state read/write here;
-    * a state cell's `kind` is the resource `metadata.name`. See
-    * docs/state-tree.spec.md.
-    */
-   getState(rc: ResourceObject): StateCell | undefined {
-      return this.sessionStateLeaf().get(rc.name)
-   }
-
-   setState(rc: ResourceObject, value: StateCell): void {
-      value.kind = rc.name
-      this.sessionStateLeaf().upsert(value)
-   }
-
-   findLeaf<C extends Cell>(sub: string): Leaf<C> | undefined {
-      return this.tree.findLeaf<C>(joinLeafPath(SESSION_SCOPE_PATH, sub))
-   }
-
-   acquireLeaf<C extends Cell>(sub: string): Leaf<C> {
-      return this.tree.acquireLeaf<C>(joinLeafPath(SESSION_SCOPE_PATH, sub))
-   }
-
-   deleteLeaf(sub: string): void {
-      this.tree.deleteLeaf(joinLeafPath(SESSION_SCOPE_PATH, sub))
-   }
-
-   private sessionStateLeaf(): Leaf<StateCell> {
-      return this.tree.acquireLeaf<StateCell>(joinLeafPath(SESSION_SCOPE_PATH, "state"))
-   }
-
-   // ── Serialization / restoration ────────────────────────────────────
-
-   /**
-    * Snapshot the whole session as plain JSON: the agent identity plus the
-    * Tree (every leaf — threads, per-scope state, interact, custom sub-leaves).
-    * The blueprint itself is NOT serialized (it is reloaded by the host from
-    * its path); transient handles (MCP clients, model caches) reconnect lazily.
-    * See docs/state-tree.spec.md.
-    */
-   serialize(): SessionSnapshot {
-      return {
-         sessionId: this.sessionId,
-         agentName: this.agentName,
-         tree: this.tree.snapshot(),
-      }
-   }
-
-   /**
-    * Rebuild a session from a snapshot against a freshly-loaded blueprint.
-    * Constructs the session (re-instantiating resources, which reconnect
-    * eagerly — e.g. MCP), then restores the Tree into the live leaves and
-    * offers each resource its state cell via `restoreState` (no-op for
-    * Pattern A resources whose state already lives in the leaf).
-    */
-   static async restore(
-      snapshot: SessionSnapshot,
-      blueprint: Blueprint,
-   ): Promise<AgentSession> {
-      const session = new AgentSession(blueprint, snapshot.agentName)
-      // Preserve the original identity (the constructor minted a fresh id).
-      ;(session as { sessionId: string }).sessionId = snapshot.sessionId
-      session.tree.restore(snapshot.tree)
-      for (const r of session.blueprint.resources) {
-         await r.restoreState?.(session.getState(r), "session")
-         await r.restoreState?.(session.context.getState(r), "context")
+      session._agentName = name
+      session._sessionId = `${name}-${timecode()}`
+      session._context = new AgentContext(session, { agent: res })
+      for (const resource of session.resources) {
+         resource.bindToSession?.(session)
       }
       return session
    }
 
-   // ── Environments ──────────────────────────────────────────────────
-
-   /** Register an environment by name. Replaces any existing one. */
-   registerEnvironment(env: ActivityEnvironment): void {
-      this.environments.set(env.name, env)
+    /** Release every per-session resource (transports, workers, caches). */
+    async close(): Promise<void> {
+       for (const r of this.resources) {
+          await r.close?.()
+       }
    }
 
-   getEnvironment(name: string): ActivityEnvironment | undefined {
-      return this.environments.get(name)
+    /** Allocate a session-unique identifier with the given label prefix. */
+    allocId(prefix: string): string {
+       return `${this.agentName}-${prefix}-${this.idCounter++}`
+    }
+
+    registerContext(ctx: AgentContext): void {
+       this.contexts.set(ctx.contextId, ctx)
+    }
+
+    getContext(contextId: string): AgentContext | undefined {
+       return this.contexts.get(contextId)
+    }
+
+    listContexts(): AgentContext[] {
+       return [...this.contexts.values()]
+    }
+
+    // ── State-Tree façade (session scope) ──────────────────────────────
+
+    /**
+     * Session-scoped state accessors, rooted at the reserved `/.session` path.
+     * Resources that carry session-level (cross-context) state read/write here;
+     * a state cell's `kind` is the resource `metadata.name`. See
+     * docs/architecture.spec.md.
+     */
+    getState(rc: ResourceObject): StateCell | undefined {
+       return this.sessionStateLeaf().get(rc.name)
+    }
+
+    setState(rc: ResourceObject, value: StateCell): void {
+       value.kind = rc.name
+       this.sessionStateLeaf().upsert(value)
+    }
+
+    findLeaf<C extends Cell>(sub: string): Leaf<C> | undefined {
+       return this.tree.findLeaf<C>(joinLeafPath(SESSION_SCOPE_PATH, sub))
+    }
+
+    acquireLeaf<C extends Cell>(sub: string): Leaf<C> {
+       return this.tree.acquireLeaf<C>(joinLeafPath(SESSION_SCOPE_PATH, sub))
+    }
+
+    deleteLeaf(sub: string): void {
+       this.tree.deleteLeaf(joinLeafPath(SESSION_SCOPE_PATH, sub))
+    }
+
+    private sessionStateLeaf(): Leaf<StateCell> {
+       return this.tree.acquireLeaf<StateCell>(joinLeafPath(SESSION_SCOPE_PATH, "state"))
+    }
+
+    // ── Serialization / restoration ────────────────────────────────────
+
+    /**
+     * Snapshot the whole session as plain JSON: the agent identity plus the
+     * Tree (every leaf — threads, per-scope state, interact, custom sub-leaves).
+     * The blueprint itself is NOT serialized (it is reloaded by the host from
+     * its path); transient handles (MCP clients, model caches) rebuild at the
+     * restored session's creation. See docs/architecture.spec.md.
+     */
+    serialize(): SessionSnapshot {
+       return {
+          sessionId: this.sessionId,
+          agentName: this.agentName,
+          tree: this.tree.snapshot(),
+       }
+    }
+
+    /**
+     * Rebuild a session from a snapshot against its blueprint. Creates a fresh
+     * session (instantiating per-session resources, which connect eagerly —
+     * e.g. MCP), then restores the Tree into the live leaves and offers each
+     * resource its state cell via `restoreState` (no-op for Pattern A
+     * resources whose state already lives in the leaf).
+     */
+    static async restore(
+       snapshot: SessionSnapshot,
+       blueprint: Blueprint,
+   ): Promise<AgentSession> {
+       const session = await AgentSession.create(blueprint, snapshot.agentName)
+       // Preserve the original identity (the factory minted a fresh id).
+       ;(session as unknown as { _sessionId: string })._sessionId = snapshot.sessionId
+       session.tree.restore(snapshot.tree)
+       for (const r of session.resources) {
+          await r.restoreState?.(session.getState(r), "session")
+          await r.restoreState?.(session.context.getState(r), "context")
+       }
+       return session
    }
 
-   // ── Activity lifecycle ────────────────────────────────────────────
-   //
-   // Activities live as CELLS in each context's /activities leaf — data, part
-   // of the Tree, serializable for free. The session only routes host resolution
-   // to the owning context. There is no in-memory activity store, no await
-   // graph, no watcher map, and NO promise-based resume: the host re-calls
-   // execute() to continue after a resolution.
+    // ── Environments ──────────────────────────────────────────────────
 
-   /** Resolve an activity as completed with a final result (host-driven). */
-   resolveActivity(activityId: ActivityId, result: any): void {
-      this.routeSettle(activityId, result, false)
-   }
+    /** Register an environment by name. Replaces any existing one. */
+    registerEnvironment(env: ActivityEnvironment): void {
+       this.environments.set(env.name, env)
+    }
 
-   /** Terminate an activity as failed with an error value (host-driven). */
-   failActivity(activityId: ActivityId, error: any): void {
-      this.routeSettle(activityId, error, true)
-   }
+    getEnvironment(name: EnvironmentName): ActivityEnvironment | undefined {
+       return this.environments.get(name)
+    }
 
-   /** Route a terminal settlement to the owning context (no-op if unknown). */
-   private routeSettle(activityId: ActivityId, payload: any, isError: boolean): void {
-      for (const ctx of this.contexts.values()) {
-         if (ctx.ownsActivity(activityId)) {
-            ctx.settleActivity(activityId, payload, isError)
-            return
-         }
+    // ── Activity lifecycle ────────────────────────────────────────────
+    //
+    // Activities live as CELLS in each context's /activities leaf — data, part
+    // of the Tree, serializable for free. The session only routes host resolution
+    // to the owning context. There is no in-memory activity store, no await
+    // graph, no watcher map, and NO promise-based resume: the host re-calls
+    // execute() to continue after a resolution.
+
+    /** Resolve an activity as completed with a final result (host-driven). */
+    resolveActivity(activityId: ActivityId, result: any): void {
+       this.routeSettle(activityId, result, false)
+    }
+
+    /** Terminate an activity as failed with an error value (host-driven). */
+    failActivity(activityId: ActivityId, error: any): void {
+       this.routeSettle(activityId, error, true)
+    }
+
+    /** Route a terminal settlement to the owning context (no-op if unknown). */
+    private routeSettle(activityId: ActivityId, payload: any, isError: boolean): void {
+       for (const ctx of this.contexts.values()) {
+          if (ctx.ownsActivity(activityId)) {
+             ctx.settleActivity(activityId, payload, isError)
+             return
+          }
+       }
+    }
+
+       // ── Execution ─────────────────────────────────────────────────────
+
+      async execute(userMessage?: string): Promise<void> {
+         await this.context.run(userMessage)
       }
-   }
 
-      // ── Execution ─────────────────────────────────────────────────────
-
-     async execute(userMessage?: string): Promise<void> {
-        await this.context.run(userMessage)
-     }
-
-     /**
-      * Inject a host steering into a context's thread (root by default, or the
-      * context identified by opts.contextId). Steering is generic per context —
-      * a sub-agent can be steered like the root. Setup is synchronous; the loop
-      * runs fire-and-forget. Throws SteeringBusyError (→ HTTP 409) when the loop
-      * is busy and the injection cannot apply, or when contextId is unknown.
-      * See docs/studio.spec.md § "Steering".
-      */
-     steer(text: string, opts?: SteerOptions): void {
-        const target = opts?.contextId
-           ? this.getContext(opts.contextId)
-           : this.context
-        if (!target) {
-           throw new SteeringBusyError(`unknown contextId: ${opts?.contextId}`)
-        }
-        target.steer(text, opts)
-     }
+      /**
+       * Inject a host steering into a context's thread (root by default, or the
+       * context identified by opts.contextId). Steering is generic per context —
+       * a sub-agent can be steered like the root. Setup is synchronous; the loop
+       * runs fire-and-forget. Throws SteeringBusyError (→ HTTP 409) when the loop
+       * is busy and the injection cannot apply, or when contextId is unknown.
+       * See docs/architecture.spec.md § "La boucle de run".
+       */
+      steer(text: string, opts?: SteerOptions): void {
+         const target = opts?.contextId
+            ? this.getContext(opts.contextId)
+            : this.context
+         if (!target) {
+            throw new SteeringBusyError(`unknown contextId: ${opts?.contextId}`)
+         }
+         target.steer(text, opts)
+      }
 
     on(event: "fragment", listener: (e: ContextRef & { fragment: Fragment }) => void): this
     on(event: "thinking", listener: (e: ContextRef) => void): this
@@ -278,19 +359,44 @@ export class AgentSession {
     }
 
    off(event: string, listener: (...args: any[]) => void): this {
-      this.events.off(event, listener)
-      return this
+       this.events.off(event, listener)
+       return this
+   }
+}
+
+/**
+ * Second pass over the instantiated objects: now that every preset exists,
+ * each agent/posture/skill that declared `spec.extends: [...]` is rebuilt with
+ * its presets merged into an immutable spec (instruction + tooling + hooks).
+ * Done after instantiation so presets may be declared in any order relative to
+ * their consumers. The merged object replaces the original in the session's
+ * resources.
+ */
+function resolveExtends(resources: ResourceObject[]): void {
+   const presets = new Map<string, PresetView>()
+   for (const r of resources) {
+      const preset = r.asPreset?.()
+      if (preset) presets.set(r.name, preset)
+   }
+   for (let i = 0; i < resources.length; i++) {
+      const r = resources[i]
+      const withExtends = r as ResourceObject & {
+         withExtends?(p: Map<string, PresetView>): ResourceObject
+      }
+      if (typeof withExtends.withExtends === "function") {
+         resources[i] = withExtends.withExtends(presets)
+      }
    }
 }
 
 /**
  * Resolves the agent resource to bind a session to when no agent name is
  * passed. A blueprint holds no "primary" agent — it is just a collection of
- * resources — so we default to the single agent resource, and require an
+ * descriptors — so we default to the single agent resource, and require an
  * explicit name when several are declared.
  */
-function pickDefaultAgent(blueprint: Blueprint): string {
-   const agents = blueprint.resources.filter(
+function pickDefaultAgent(resources: ResourceObject[]): string {
+   const agents = resources.filter(
       (r): r is AgentObject => r instanceof AgentObject,
    )
    if (agents.length === 0) {

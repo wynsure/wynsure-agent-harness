@@ -17,10 +17,7 @@ import {
     McpDirectSpecSchema,
     McpDirectManifestSchema,
 } from "../src/extensions/mcp-direct/index.ts"
-import {
-    scheme,
-    type ObjectLoadContext,
-} from "../src/blueprint/object-meta.ts"
+import { scheme, type ObjectLoadContext } from "../src/runtime/scheme.ts"
 import type { AgentContext } from "../src/runtime/context.ts"
 // Side-effect import to ensure the kind is registered.
 import "../src/extensions"
@@ -28,7 +25,8 @@ import "../src/extensions"
 const FIXTURE_ENTRY = pathResolve(import.meta.dirname, "fixtures/direct-echo-server.ts")
 
 function loadCtx(): ObjectLoadContext {
-    return { cwd: import.meta.dirname, blueprint: undefined }
+    // McpDirect's factory only consumes `cwd`.
+    return { cwd: import.meta.dirname } as ObjectLoadContext
 }
 
 function captureContext(): { ctx: AgentContext; deliveries: any[] } {
@@ -77,7 +75,7 @@ describe("mcp-direct scheme registration", () => {
     it("McpDirect is registered under agent/v1", () => {
         const entry = scheme.lookup("agent/v1", "McpDirect")
         assert(!!entry, "registered")
-        eq(entry!.metadata.surface, "Permanent (lien in-process établi au load)", "surface documented")
+        eq(entry!.metadata.surface, "Permanent (lien in-process établi à l'instanciation de session)", "surface documented")
     })
 
     it("McpDirect factory is the static fromManifest", () => {

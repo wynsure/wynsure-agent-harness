@@ -19,7 +19,7 @@ import {
     McpServerAuthSchema,
     ClientCredentialsOAuthProvider,
 } from "../src/extensions/mcp-server/index.ts"
-import { scheme, type ObjectLoadContext } from "../src/blueprint/object-meta.ts"
+import { scheme, type ObjectLoadContext } from "../src/runtime/scheme.ts"
 // Side-effect import to ensure the kind is registered.
 import "../src/extensions"
 
@@ -115,7 +115,7 @@ describe("mcp-server scheme registration", () => {
     it("McpServer is registered under agent/v1", () => {
         const entry = scheme.lookup("agent/v1", "McpServer")
         assert(!!entry, "registered")
-        eq(entry!.metadata.surface, "Permanent (connexion persistante au load)", "surface documented")
+        eq(entry!.metadata.surface, "Permanent (connexion persistante, une par session)", "surface documented")
     })
 
     it("McpServer factory is the static fromManifest", () => {
@@ -233,7 +233,8 @@ describe("mcp-server template preservation in toManifest", () => {
             metadata: { name: "dead" },
             spec: { endpoint: "http://127.0.0.1:1/mcp" },
         } as any
-        const ctx: ObjectLoadContext = { cwd: ".", blueprint: undefined }
+        // The factory only consumes `cwd` before the connection attempt.
+        const ctx = { cwd: "." } as ObjectLoadContext
         let threw = false
         try {
             const entry = scheme.lookup("agent/v1", "McpServer")!

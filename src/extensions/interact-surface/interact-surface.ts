@@ -38,21 +38,24 @@
  * that simply has no user-facing surface.
  */
 import { z } from "zod"
-import {
-   type ResourceObject,
-   type ToolGuide,
-   type ToolName,
-   type GuardrailDecl,
-   type HookEntry,
-   type HookTrigger,
-} from "../../blueprint/blueprint.ts"
+import type {
+   ResourceObject,
+} from "../../runtime/resource.ts"
+import type {
+   ToolGuide,
+   ToolName,
+} from "../../runtime/tool.ts"
+import type {
+   GuardrailDecl,
+   HookEntry,
+   HookTrigger,
+} from "../../blueprint/blueprint-schema.ts"
 import {
    type ObjectManifest,
    type ObjectMeta,
-   type ObjectLoadContext,
-   scheme,
    ObjectMetaSchema,
 } from "../../blueprint/object-meta.ts"
+import { type ObjectLoadContext, scheme } from "../../runtime/scheme.ts"
 import { AGENT_API_VERSION } from "../../blueprint/api-version.ts"
 import type { AgentContext } from "../../runtime/context.ts"
 import type { AgentSession } from "../../runtime/session.ts"
@@ -175,8 +178,8 @@ export class InteractSurfaceObject implements ResourceObject {
       _ctx: ObjectLoadContext,
    ): Promise<InteractSurfaceObject> {
       const spec = manifest.spec
-      // Fail fast on unknown tool names so a typo in the blueprint surfaces at
-      // load time, not as a silently empty surface at runtime.
+       // Fail fast on unknown tool names so a typo in the blueprint surfaces
+       // at session instantiation, not as a silently empty surface at runtime.
       if (spec.tools !== undefined && spec.tools !== "*") {
          const all = getInteractTools()
          for (const requested of spec.tools) {

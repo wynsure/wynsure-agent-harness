@@ -1,40 +1,46 @@
 import { z } from "zod"
-import {
-   type Blueprint,
-   type PresetView,
-   type ResourceObject,
-   type ToolGuide,
-   type ToolName,
-   type ToolingEntry,
-   type GuardrailDecl,
-   type HookEntry,
-   type HookTrigger,
-} from "../blueprint.ts"
-import { resolveToolingGuides, dedupGuardrails } from "./posture.ts"
+import type {
+   PresetView,
+   ResourceObject,
+} from "../resource.ts"
+import type {
+   ToolGuide,
+   ToolName,
+} from "../tool.ts"
+import type { AgentContext } from "../context.ts"
+import type { AgentSession } from "../session.ts"
 import {
    type InstructionTemplate,
    resolveInstructionTemplate,
    checkInstructionTemplate,
    resolveInstructionRef,
    mergeInstructionTemplates,
-} from "../instruction.ts"
+} from "../../blueprint/instruction.ts"
 import {
    type ObjectManifest,
    type ObjectMeta,
+   ObjectMetaSchema,
+} from "../../blueprint/object-meta.ts"
+import {
    type ObjectLoadContext,
    scheme,
-   ObjectMetaSchema,
-} from "../object-meta.ts"
+} from "../scheme.ts"
 import {
    GuardrailsSchema,
    HooksSchema,
    InstructionRefSchema,
    ToolingSchema,
-} from "../blueprint-schema.ts"
-import type { AgentContext } from "../../runtime/context.ts"
+} from "../../blueprint/blueprint-schema.ts"
+import type {
+   GuardrailDecl,
+   HookEntry,
+   HookTrigger,
+   ToolingEntry,
+} from "../../blueprint/blueprint-schema.ts"
 import type { ActivityId } from "../../state/activity.ts"
 import { createSkillAttach } from "../../state/fragment.ts"
-import { AGENT_API_VERSION } from "./agent.ts"
+import { resolveToolingGuides, dedupGuardrails } from "./tooling.ts"
+import { AGENT_API_VERSION } from "../../blueprint/api-version.ts"
 
 function contextVariables(context: AgentContext): Record<string, unknown> {
    return {
@@ -54,9 +60,9 @@ function contextVariables(context: AgentContext): Record<string, unknown> {
  * template (legacy inline skill).
  *
  * Activation (bundle complet): emits SkillAttach with the resolved instruction,
- * and â€” while the skill stays attached â€” its tooling joins the context's
+ * and — while the skill stays attached — its tooling joins the context's
  * available tools and its on_completion hooks fire at end of turn. See
- * docs/resources.spec.md.
+ * docs/resources.md.
  */
 export const SkillSpecSchema = z
    .object({
@@ -104,19 +110,19 @@ export class SkillObject implements ResourceObject {
    readonly spec: SkillSpec
    status: SkillStatus = { mergedFrom: [] }
    private readonly runtime: SkillRuntime
-   private readonly blueprint: Blueprint
+   private readonly session: AgentSession
 
    constructor(
       metadata: ObjectMeta,
       spec: SkillSpec,
       runtime: SkillRuntime,
-      blueprint: Blueprint,
+      session: AgentSession,
    ) {
       this.metadata = metadata
       this.name = metadata.name
       this.spec = spec
       this.runtime = runtime
-      this.blueprint = blueprint
+      this.session = session
    }
 
    /** Skill description (intent exposed when linked via a tooling entry). */
@@ -125,7 +131,7 @@ export class SkillObject implements ResourceObject {
    }
 
    /**
-    * A skill never contributes tools to the static surface on its own â€” it is
+    * A skill never contributes tools to the static surface on its own — it is
     * only callable once linked via a `type: skill` tooling entry, which the
     * active posture resolves through resolveToolingGuides.
     */
@@ -133,67 +139,67 @@ export class SkillObject implements ResourceObject {
       return []
    }
 
-    getHooks(trigger: HookTrigger): HookEntry[] {
-       switch (trigger) {
-          case "on_start": return this.runtime.onStartHooks
-          case "on_completion": return this.runtime.onCompletionHooks
-          case "on_tool_use": return this.runtime.onToolUseHooks
-          case "on_tool_error": return this.runtime.onToolErrorHooks
-       }
-    }
+   getHooks(trigger: HookTrigger): HookEntry[] {
+      switch (trigger) {
+         case "on_start": return this.runtime.onStartHooks
+         case "on_completion": return this.runtime.onCompletionHooks
+         case "on_tool_use": return this.runtime.onToolUseHooks
+         case "on_tool_error": return this.runtime.onToolErrorHooks
+      }
+   }
 
-    getGuardrails(): GuardrailDecl[] {
-       return this.runtime.guardrails
-    }
+   getGuardrails(): GuardrailDecl[] {
+      return this.runtime.guardrails
+   }
 
-    /** Tooling live while the skill is attached (see AgentContext.collectTools). */
-    getActiveTooling(): ToolGuide[] {
-       return resolveToolingGuides(this.runtime.tooling, this.blueprint)
-    }
+   /** Tooling live while the skill is attached (see AgentContext.collectTools). */
+   getActiveTooling(): ToolGuide[] {
+      return resolveToolingGuides(this.runtime.tooling, this.session)
+   }
 
-     withExtends(presets: Map<string, PresetView>): SkillObject {
-        const extendsNames = this.spec.extends ?? []
-        if (extendsNames.length === 0) return this
-       const templates: (InstructionTemplate | null)[] = []
-       const tooling = [...this.runtime.tooling]
-       const onStartHooks = [...this.runtime.onStartHooks]
-       const onCompletionHooks = [...this.runtime.onCompletionHooks]
-       const onToolUseHooks = [...this.runtime.onToolUseHooks]
-       const onToolErrorHooks = [...this.runtime.onToolErrorHooks]
-       const guardrails = [...this.runtime.guardrails]
-       const mergedFrom: string[] = []
-       for (const name of extendsNames) {
-          const p = presets.get(name)
-          if (!p) {
-             throw new Error(`skill "${this.name}" extends unknown preset "${name}"`)
-          }
-          templates.push(p.getTemplate())
-          tooling.unshift(...p.getTooling())
-          onStartHooks.push(...p.getHooks("on_start"))
-          onCompletionHooks.push(...p.getHooks("on_completion"))
-          onToolUseHooks.push(...p.getHooks("on_tool_use"))
-          onToolErrorHooks.push(...p.getHooks("on_tool_error"))
-          guardrails.push(...p.getGuardrails())
-          mergedFrom.push(name)
-       }
-       const merged = mergeInstructionTemplates([...templates, this.runtime.template])
-       const next = new SkillObject(
-          this.metadata,
-          this.spec,
-          {
-             template: merged ?? this.runtime.template,
-             tooling,
-             onStartHooks,
-             onCompletionHooks,
-             onToolUseHooks,
-             onToolErrorHooks,
-             guardrails: dedupGuardrails(guardrails),
-          },
-          this.blueprint,
-       )
-       next.status = { mergedFrom }
-       return next
-     }
+   withExtends(presets: Map<string, PresetView>): SkillObject {
+      const extendsNames = this.spec.extends ?? []
+      if (extendsNames.length === 0) return this
+      const templates: (InstructionTemplate | null)[] = []
+      const tooling = [...this.runtime.tooling]
+      const onStartHooks = [...this.runtime.onStartHooks]
+      const onCompletionHooks = [...this.runtime.onCompletionHooks]
+      const onToolUseHooks = [...this.runtime.onToolUseHooks]
+      const onToolErrorHooks = [...this.runtime.onToolErrorHooks]
+      const guardrails = [...this.runtime.guardrails]
+      const mergedFrom: string[] = []
+      for (const name of extendsNames) {
+         const p = presets.get(name)
+         if (!p) {
+            throw new Error(`skill "${this.name}" extends unknown preset "${name}"`)
+         }
+         templates.push(p.getTemplate())
+         tooling.unshift(...p.getTooling())
+         onStartHooks.push(...p.getHooks("on_start"))
+         onCompletionHooks.push(...p.getHooks("on_completion"))
+         onToolUseHooks.push(...p.getHooks("on_tool_use"))
+         onToolErrorHooks.push(...p.getHooks("on_tool_error"))
+         guardrails.push(...p.getGuardrails())
+         mergedFrom.push(name)
+      }
+      const merged = mergeInstructionTemplates([...templates, this.runtime.template])
+      const next = new SkillObject(
+         this.metadata,
+         this.spec,
+         {
+            template: merged ?? this.runtime.template,
+            tooling,
+            onStartHooks,
+            onCompletionHooks,
+            onToolUseHooks,
+            onToolErrorHooks,
+            guardrails: dedupGuardrails(guardrails),
+         },
+         this.session,
+      )
+      next.status = { mergedFrom }
+      return next
+   }
 
    toManifest(): ObjectManifest {
       return {
@@ -208,28 +214,29 @@ export class SkillObject implements ResourceObject {
       manifest: SkillManifest,
       ctx: ObjectLoadContext,
    ): Promise<SkillObject> {
-      const blueprint = ctx.blueprint as Blueprint
       const spec = manifest.spec
       const template: InstructionTemplate | null = spec.instruction
-         ? resolveInstructionRef(spec.instruction, blueprint.instructions, {
-              defaultName: manifest.metadata.name,
-           })
+         ? resolveInstructionRef(
+              spec.instruction,
+              ctx.session.blueprint.instructions,
+              { defaultName: manifest.metadata.name },
+           )
          : null
-       return new SkillObject(
-          manifest.metadata,
-          spec,
-          {
-             template,
-             tooling: spec.tooling ?? [],
-             onStartHooks: spec.hooks?.on_start ?? [],
-             onCompletionHooks: spec.hooks?.on_completion ?? [],
-             onToolUseHooks: spec.hooks?.on_tool_use ?? [],
-             onToolErrorHooks: spec.hooks?.on_tool_error ?? [],
-             guardrails: spec.guardrails ?? [],
-          },
-          blueprint,
-       )
-    }
+      return new SkillObject(
+         manifest.metadata,
+         spec,
+         {
+            template,
+            tooling: spec.tooling ?? [],
+            onStartHooks: spec.hooks?.on_start ?? [],
+            onCompletionHooks: spec.hooks?.on_completion ?? [],
+            onToolUseHooks: spec.hooks?.on_tool_use ?? [],
+            onToolErrorHooks: spec.hooks?.on_tool_error ?? [],
+            guardrails: spec.guardrails ?? [],
+         },
+         ctx.session,
+      )
+   }
 
    /**
     * Activation path (bundle complet): resolve + requirement-check the
@@ -286,8 +293,8 @@ scheme.register({
    manifestSchema: SkillManifestSchema,
    factory: SkillObject.fromManifest,
    metadata: {
-      role: "Bundle toggable (instruction + tooling + hooks) attachÃ© au runtime.",
-      surface: "AttachÃ©e uniquement",
+      role: "Bundle toggable (instruction + tooling + hooks) attaché au runtime.",
+      surface: "Attachée uniquement",
       example: `apiVersion: agent/v1
 kind: Skill
 metadata:
@@ -299,16 +306,16 @@ spec:
     - type: toolset
       tools: pantry/*`,
       notes: [
-         "Activation via une entrÃ©e `toolset tools: <name>/*` dans une posture ou skill.",
-         "DÃ©sactivation automatique au changement de posture ou Ã  la fermeture du context.",
+         "Activation via une entrée `toolset tools: <name>/*` dans une posture ou skill.",
+         "Désactivation automatique au changement de posture ou à la fermeture du context.",
       ],
       fieldDocs: {
-         "spec.extends": "Presets fusionnÃ©s au load (mÃ©canique kind-spÃ©cifique).",
-         "spec.description": "Description humaine (intent exposÃ© au LLM pour les skills).",
+         "spec.extends": "Presets fusionnés à la création de session (mécanique kind-spécifique).",
+         "spec.description": "Description humaine (intent exposé au LLM pour les skills).",
          "spec.instruction": "Instruction (`{ $ref }`, `{ content }`, ou chemin de fichier).",
-         "spec.tooling": "Surface d'outils â€” entries `toolset` / `route` / `subagent`.",
+         "spec.tooling": "Surface d'outils — entries `toolset` / `route` / `subagent`.",
          "spec.hooks": "Automations par trigger (`on_start` / `on_completion` / `on_tool_use` / `on_tool_error`).",
-         "spec.guardrails": "Assertions appliquÃ©es sur les tool calls.",
+         "spec.guardrails": "Assertions appliquées sur les tool calls.",
       },
    },
 })

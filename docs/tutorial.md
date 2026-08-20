@@ -250,9 +250,10 @@ for both chatting and steering. Because interactions delegate to the
 
 ## Step 6 — a closer look with deep introspection
 
-The `--deep` flag goes one step further than `check`: it actually **loads** the
-blueprint, which means it connects any `McpStdio` transports and lists the
-exact tools they publish. If you later attach an MCP server (say, a recipe
+The `--deep` flag goes one step further than `check`: it actually
+**instantiates** the blueprint's resources (the same thing session creation
+does), which means it connects any `McpStdio` transports and lists the exact
+tools they publish. If you later attach an MCP server (say, a recipe
 database), deep-check is how you confirm its tool names before referencing them
 in a `toolset`:
 
@@ -260,14 +261,14 @@ in a `toolset`:
 agent-blueprint check pantri.blueprint.yaml --deep
 ```
 
-Pantri has no MCP server, so `--deep` simply confirms the load succeeds and
-reports the resource count. Add a `kind: McpStdio` resource and you will see a
-per-resource tool list printed under each connection.
+Pantri has no MCP server, so `--deep` simply confirms the instantiation
+succeeds and reports the resource count. Add a `kind: McpStdio` resource and
+you will see a per-resource tool list printed under each connection.
 
 ## Where to go next
 
 - The complete reference for every field of every kind: [`resources.md`](./resources.md).
 - Generate that reference yourself at any time with `agent-blueprint docs`.
-- The deeper specifications — activities, hooks & guardrails, the studio
-  protocol — live under the repository `docs/` folder
-  (`activities.spec.md`, `hooks-guardrails.spec.md`, `studio.spec.md`).
+- The deeper specification — layers, the manifest→object cycle, the activity
+  model, serialization — is [`architecture.spec.md`](./architecture.spec.md);
+  the mental model is [`concepts.md`](./concepts.md).

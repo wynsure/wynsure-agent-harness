@@ -30,7 +30,7 @@
  * seam, the entry owns its side effects.
  */
 import { z, type ZodType } from "zod"
-import { defineTool, type ToolGuide } from "../../blueprint/blueprint.ts"
+import { defineTool, type ToolGuide } from "../../runtime/tool.ts"
 import { createUserMessage } from "../../state/fragment.ts"
 import type { AgentContext } from "../../runtime/context.ts"
 import type {

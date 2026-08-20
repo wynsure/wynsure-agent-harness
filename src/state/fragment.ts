@@ -2,8 +2,7 @@
  * Common shape shared by every fragment: a `kind` discriminator plus a link to
  * the activity that produced it. When `activityId` is absent, the emitting
  * AgentContext fills it with the appropriate root (`modelActivityId` for LLM
- * generation, `harnessActivityId` for the rest). See docs/activities.spec.md,
- * docs/hooks-guardrails.spec.md.
+ * generation, `harnessActivityId` for the rest). See docs/architecture.spec.md.
  *
  * `kind` (was `type`) is the variant discriminator — unified with the Cell
  * contract so an agent thread (`Leaf<Fragment>`) and a user-interaction
@@ -12,7 +11,6 @@
  * tool) is exposed as `tool`, not `kind`, to avoid the collision.
  */
 import type { ActivityId, EnvironmentName, ToolUseId } from "./activity.ts"
-import type { ToolName } from "../blueprint/blueprint.ts"
 import type { Cell } from "./leaf.ts"
 
 export interface FragmentBase extends Cell {
@@ -85,14 +83,14 @@ export interface ThinkingFragment extends FragmentBase {
 export interface ToolUseFragment extends FragmentBase {
    kind: "ToolUse"
    id: ToolUseId
-   toolName: ToolName
+   toolName: string
    arguments: Record<string, any>
 }
 
 export interface ToolFeedbackFragment extends FragmentBase {
    kind: "ToolFeedback"
    toolUseId: ToolUseId
-   toolName: ToolName
+   toolName: string
    result: any
    isError?: boolean
 }
@@ -128,7 +126,7 @@ export interface SubagentCompleteFragment extends FragmentBase {
  * Opens a child activity (child of one of the context's two activity roots:
  * `modelActivityId` for an LLM tool call, `harnessActivityId` for a hook /
  * guardrail). Ignored by the completion provider (audit signal). See
- * docs/activities.spec.md.
+ * docs/architecture.spec.md.
  */
 export interface ActivityStartFragment extends FragmentBase {
    kind: "ActivityStart"
@@ -221,7 +219,7 @@ export function createThinking(content: string, source?: string): ThinkingFragme
 
 export function createToolUse(
    id: ToolUseId,
-   toolName: ToolName,
+   toolName: string,
    args: Record<string, any>,
 ): ToolUseFragment {
    return { kind: "ToolUse", id, toolName, arguments: args }
@@ -229,7 +227,7 @@ export function createToolUse(
 
 export function createToolFeedback(
    toolUseId: ToolUseId,
-   toolName: ToolName,
+   toolName: string,
    result: any,
    isError?: boolean,
 ): ToolFeedbackFragment {

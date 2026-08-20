@@ -1,4 +1,4 @@
-import { type ZodType, z } from "zod"
+import { z } from "zod"
 
 /**
  * TypeMeta — the (apiVersion, kind) pair that identifies a resource's schema
@@ -95,23 +95,6 @@ export function labelSelectorMatches(
 }
 
 /**
- * A Factory builds a live Object from a validated manifest, given the load
- * context (blueprint + cwd). Objects own their construction seam: each kind
- * exposes `static fromManifest`, and the Factory below is the type-erased form
- * the Scheme stores so it can dispatch without knowing concrete kinds.
- */
-export type ObjectFactory<M extends ObjectManifest = ObjectManifest, O = unknown> = (
-   manifest: M,
-   ctx: ObjectLoadContext,
-) => Promise<O> | O
-
-export interface ObjectLoadContext {
-   readonly cwd: string
-   /** Resolved later; passed as `any` to avoid a circular type import. */
-   readonly blueprint: unknown
-}
-
-/**
  * KindMetadata — the self-description each kind provides at registration time.
  * Drives auto-generated documentation (`docs` command) and any future
  * introspection surface. Values are doc strings (French) matching the tone of
@@ -135,99 +118,17 @@ export interface KindMetadata {
    readonly fieldDocs?: Record<string, string>
 }
 
-export interface SchemeEntry {
-   readonly apiVersion: string
-   readonly kind: string
-   readonly manifestSchema: ZodType
-   readonly factory: ObjectFactory
-   readonly metadata: KindMetadata
-}
-
-/**
- * Scheme — the single registry binding (apiVersion, kind) to its manifest
- * schema, object factory, and self-description. Replaces the two parallel
- * registries (validation + loader) that had to be kept in sync by convention.
- * Each concrete resource module registers itself once via `scheme.register(...)`.
- */
-export class Scheme {
-   private readonly entries = new Map<string, SchemeEntry>()
-
-   private key(apiVersion: string, kind: string): string {
-      return `${apiVersion}/${kind}`
-   }
-
-   register(opts: {
-      apiVersion: string
-      kind: string
-      manifestSchema: ZodType
-      factory: ObjectFactory
-      metadata: KindMetadata
-   }): void {
-      const k = this.key(opts.apiVersion, opts.kind)
-      if (this.entries.has(k)) {
-         throw new Error(
-            `Scheme: (${opts.apiVersion}, ${opts.kind}) already registered`,
-         )
-      }
-      this.entries.set(k, {
-         apiVersion: opts.apiVersion,
-         kind: opts.kind,
-         manifestSchema: opts.manifestSchema,
-         factory: opts.factory,
-         metadata: opts.metadata,
-      })
-   }
-
-   lookup(apiVersion: string, kind: string): SchemeEntry | undefined {
-      return this.entries.get(this.key(apiVersion, kind))
-   }
-
-   /** All registered entries — used for introspection (e.g. check command). */
-   entries_list(): SchemeEntry[] {
-      return [...this.entries.values()]
-   }
-}
-
-/** The shared, process-wide scheme. Resource modules register into it. */
-export const scheme = new Scheme()
-
 /**
  * Parse a raw YAML document into a typed ObjectManifest envelope, validating
- * the TypeMeta + ObjectMeta shell. The kind-specific `spec` is left for the
- * Scheme entry's schema. Throws a human-readable error pointing at the doc.
+ * the TypeMeta + ObjectMeta shell. The kind-specific `spec` is left to the
+ * kind registry (`runtime/scheme.ts`). Throws a human-readable error pointing
+ * at the doc.
  */
 export function parseObjectManifest(raw: unknown, index: number): ObjectManifest {
    const result = ObjectManifestEnvelopeSchema.safeParse(raw)
    if (!result.success) {
       throw new Error(
          `Blueprint document #${index} is not a valid object manifest:\n` +
-            result.error.issues
-               .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
-               .join("\n"),
-      )
-   }
-   return result.data as ObjectManifest
-}
-
-/**
- * Validate a raw document fully (envelope + kind-specific spec) and return the
- * parsed manifest. The single entry point used by the loader and by `check`.
- */
-export function validateManifest(raw: unknown, index: number): ObjectManifest {
-   const envelope = parseObjectManifest(raw, index)
-   const entry = scheme.lookup(envelope.apiVersion, envelope.kind)
-   if (!entry) {
-      throw new Error(
-         `Blueprint document #${index} has unknown kind ` +
-            `"${envelope.apiVersion}/${envelope.kind}" ` +
-            `(name="${envelope.metadata.name}").`,
-      )
-   }
-   const result = entry.manifestSchema.safeParse(raw)
-   if (!result.success) {
-      throw new Error(
-         `Blueprint document #${index} (${envelope.apiVersion}/${envelope.kind}, ` +
-            `name="${envelope.metadata.name}") failed validation:\n` +
             result.error.issues
                .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
                .join("\n"),

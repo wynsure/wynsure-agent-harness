@@ -5,17 +5,17 @@
  * session builders.
  */
 import { z } from "zod"
-import {
-   Blueprint,
-   type ResourceObject,
-   type ToolGuide,
-   type ToolName,
-   type GuardrailDecl,
-   type HookEntry,
-   type HookTrigger,
-} from "../src/blueprint/blueprint.ts"
+import { Blueprint } from "../src/blueprint/blueprint.ts"
+import type { ResourceObject } from "../src/runtime/resource.ts"
+import type { ToolGuide, ToolName } from "../src/runtime/tool.ts"
+import type {
+   GuardrailDecl,
+   HookEntry,
+   HookTrigger,
+} from "../src/blueprint/blueprint-schema.ts"
 import type { AgentContext } from "../src/runtime/context.ts"
-import { AgentObject, AGENT_API_VERSION, type AgentSpec } from "../src/blueprint/resources/index.ts"
+import { AgentObject, type AgentSpec } from "../src/runtime/resources/index.ts"
+import { AGENT_API_VERSION } from "../src/blueprint/api-version.ts"
 import { BaseModelObject } from "../src/extensions/openai-completion/model-base.ts"
 import { AgentSession } from "../src/runtime/session.ts"
 import {
@@ -88,14 +88,35 @@ export function stampDefaultModel(manifests: unknown[]): void {
    }
 }
 
-/** Push a stub model resource providing the given completion service. */
+/**
+ * Push a stub model resource providing the given completion service. The stub
+ * is registered as a descriptor whose factory returns the pre-built instance,
+ * so sessions instantiate it through the same seam as real resources.
+ */
 export function injectStubModel(
-   blueprint: Blueprint,
-   completion: IThreadCompletionService,
+    blueprint: Blueprint,
+    completion: IThreadCompletionService,
 ): StubModelObject {
-   const stub = new StubModelObject(STUB_MODEL_NAME, completion)
-   blueprint.resources.push(stub)
-   return stub
+    const stub = new StubModelObject(STUB_MODEL_NAME, completion)
+    blueprint.addResource(
+       {
+          apiVersion: "test/v1",
+          kind: "StubModel",
+          metadata: { name: STUB_MODEL_NAME },
+          spec: {},
+       },
+       () => stub,
+    )
+    return stub
+}
+
+/**
+ * Register a pre-built resource object on a blueprint as a descriptor whose
+ * factory returns the instance — the test-side equivalent of a manifest-loaded
+ * resource.
+ */
+export function pushResourceObject(blueprint: Blueprint, obj: ResourceObject): void {
+    blueprint.addResource(obj.toManifest(), () => obj)
 }
 
 /**
@@ -311,43 +332,54 @@ export interface BuildSessionOptions {
  * extra resources, wired to a ScriptedCompletionService. Callers register their
  * own environments (test-worker, user-board, …) on the returned session.
  *
- * The test agent is constructed directly (not via a manifest) since the test
- * fixtures want to inject a synthetic persona without going through file-based
- * instruction resolution.
+ * Every pre-built object is registered as a descriptor whose factory returns
+ * it (or constructs it with `ctx.session` when it needs the session), so the
+ * session instantiates them through the same seam as manifest-loaded
+ * resources.
  */
-export function buildSession(opts: BuildSessionOptions): {
+export async function buildSession(opts: BuildSessionOptions): Promise<{
     session: AgentSession
     completion: ScriptedCompletionService
-} {
+}> {
     const completion = new ScriptedCompletionService(opts.turns)
     const blueprint = new Blueprint()
-     const agent = new AgentObject(
-        { name: "test-agent" },
-        // Inline instruction content is enough for the synthetic persona; the
-        // frontmatter fields are defaulted by Zod at parse time and irrelevant
-        // for the test path (the persona is injected directly via runtime).
-        {
-           instruction: { content: "You are a test agent." },
-           model: STUB_MODEL_NAME,
-        } as AgentSpec,
-         {
-            persona: {
-               name: "test-agent",
-               instruction: "You are a test agent.",
-            },
-            guidelines: [],
-            tooling: [],
-            onStartHooks: [],
-            onCompletionHooks: [],
-            onToolUseHooks: [],
-            onToolErrorHooks: [],
-            guardrails: [],
-         },
-       )
-    blueprint.resources.push(agent)
+    blueprint.addResource(
+       {
+          apiVersion: "test/v1",
+          kind: "Agent",
+          metadata: { name: "test-agent" },
+          spec: {
+             // Inline instruction content is enough for the synthetic persona;
+             // the persona itself is injected directly via runtime below.
+             instruction: { content: "You are a test agent." },
+             model: STUB_MODEL_NAME,
+          },
+       },
+       (m, ctx) =>
+          new AgentObject(
+             m.metadata,
+             m.spec as unknown as AgentSpec,
+             {
+                persona: {
+                   name: "test-agent",
+                   instruction: "You are a test agent.",
+                },
+                guidelines: [],
+                tooling: [],
+                onStartHooks: [],
+                onCompletionHooks: [],
+                onToolUseHooks: [],
+                onToolErrorHooks: [],
+                 guardrails: [],
+              },
+              ctx.session,
+           ),
+    )
     injectStubModel(blueprint, completion)
-    for (const r of opts.resources ?? []) blueprint.resources.push(r)
-    const session = new AgentSession(blueprint)
+    for (const r of opts.resources ?? []) {
+       blueprint.addResource(r.toManifest(), () => r)
+    }
+    const session = await AgentSession.create(blueprint)
     return { session, completion }
 }
 

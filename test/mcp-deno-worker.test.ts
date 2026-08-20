@@ -24,10 +24,7 @@ import {
     McpDenoWorkerObject,
     type McpDenoWorkerSpec,
 } from "../src/extensions/mcp-deno-worker/index.ts"
-import {
-    scheme,
-    type ObjectLoadContext,
-} from "../src/blueprint/object-meta.ts"
+import { scheme, type ObjectLoadContext } from "../src/runtime/scheme.ts"
 import type { ObjectMeta } from "../src/blueprint/object-meta.ts"
 // Side-effect import to ensure the kind is registered.
 import "../src/extensions"
@@ -214,7 +211,8 @@ describe("mcp-deno-worker runtime firewall", () => {
                 env: ["SMTP_HOST"],
             },
         } as any
-        const ctx: ObjectLoadContext = { cwd: ".", blueprint: undefined }
+        // The factory only consumes `cwd` before the runtime firewall fires.
+        const ctx = { cwd: "." } as ObjectLoadContext
         let threw = false
         let msg = ""
         try {

@@ -2,22 +2,24 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"
 import { z } from "zod"
-import {
-    type Blueprint,
-    type ResourceObject,
-    type ToolGuide,
-    type ToolName,
-    type GuardrailDecl,
-    type HookEntry,
-    type HookTrigger,
-} from "../../blueprint/blueprint.ts"
+import type {
+    ResourceObject,
+} from "../../runtime/resource.ts"
+import type {
+    ToolGuide,
+    ToolName,
+} from "../../runtime/tool.ts"
+import type {
+    GuardrailDecl,
+    HookEntry,
+    HookTrigger,
+} from "../../blueprint/blueprint-schema.ts"
 import {
     type ObjectManifest,
     type ObjectMeta,
-    type ObjectLoadContext,
-    scheme,
     ObjectMetaSchema,
 } from "../../blueprint/object-meta.ts"
+import { type ObjectLoadContext, scheme } from "../../runtime/scheme.ts"
 import { renderTemplate } from "../../blueprint/scripting.ts"
 import type { AgentContext } from "../../runtime/context.ts"
 import type { ActivityId } from "../../state/activity.ts"
@@ -267,9 +269,10 @@ export class McpServerObject implements ResourceObject {
         _ctx: ObjectLoadContext,
     ): Promise<McpServerObject> {
         const obj = new McpServerObject(manifest.metadata, manifest.spec)
-        // Eagerly connect at load time — same contract as McpStdio and
-        // McpDenoWorker. Bad endpoint, missing credentials or a server that
-        // speaks neither transport surfaces here, not on the first tool call.
+        // Eagerly connect at session instantiation — same contract as
+        // McpStdio and McpDenoWorker. Bad endpoint, missing credentials or a
+        // server that speaks neither transport surfaces here, not on the
+        // first tool call.
         await obj["ensureConnected"]()
         return obj
     }
@@ -330,7 +333,7 @@ scheme.register({
     factory: McpServerObject.fromManifest,
     metadata: {
         role: "Source d'outils MCP exposés par un serveur distant (Streamable HTTP, fallback SSE).",
-        surface: "Permanent (connexion persistante au load)",
+        surface: "Permanent (connexion persistante, une par session)",
         example: `apiVersion: agent/v1
 kind: McpServer
 metadata:
@@ -342,10 +345,10 @@ spec:
     type: apiKey
     token: "{{env.CRM_API_KEY}}"`,
         notes: [
-            "Connexion établie au load (fail-fast si le serveur ne répond pas).",
+            "Connexion établie à l'instanciation de session (fail-fast si le serveur ne répond pas) ; une connexion par session.",
             "Tente Streamable HTTP puis retombe sur SSE automatiquement ; `status.transport` indique lequel a réussi.",
             "Auth `none` (défaut), `apiKey` ( bearer `Authorization: Bearer <token>`) ou `oauth` (`client_credentials`).",
-            "Chaque champ de connexion (`endpoint`, `auth.token`, `auth.clientId`, `auth.clientSecret`, `auth.tokenEndpoint`, `auth.scope`) est un template `{{env.VAR}}` résolu au load ; le spec stocké garde les templates intacts.",
+            "Chaque champ de connexion (`endpoint`, `auth.token`, `auth.clientId`, `auth.clientSecret`, `auth.tokenEndpoint`, `auth.scope`) est un template `{{env.VAR}}` résolu à l'instanciation de session ; le spec stocké garde les templates intacts.",
             "Tools publiés préfixés : `<name>__<tool>`.",
         ],
         fieldDocs: {

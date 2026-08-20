@@ -100,7 +100,7 @@ export const InstructionRefSchema = z.union([
  * `on_completion` frame a generation turn; `on_tool_use` fires before a
  * model-emitted ToolUse is executed (prevented, can block); `on_tool_error`
  * fires after a tool invocation failed (LLM or hook origin). See
- * docs/hooks-guardrails.spec.md.
+ * docs/architecture.spec.md.
  */
 export type HookTrigger =
    | "on_start"
@@ -120,8 +120,8 @@ const HookNameSchema = z.string().optional()
  * Selector describing which tool names a guardrail or hook applies to. Three
  * forms: `"*"` (all tools), an explicit list of tool names, or a label
  * selector matched against the resource that publishes the tool (same
- * semantics as a toolset selector). See docs/hooks-guardrails.spec.md §
- * "Sélecteur". Defined here so both hook and guardrail schemas can reference
+ * semantics as a toolset selector). See docs/concepts.md § "Composition, not
+ * code". Defined here so both hook and guardrail schemas can reference
  * it without a forward temporal-dead-zone reference.
  */
 export const GuardrailAppliesToSchema = z.union([
@@ -139,9 +139,8 @@ export type GuardrailAppliesTo = z.infer<typeof GuardrailAppliesToSchema>
 // `appliesTo` is optional on every hook variant and only meaningful for the
 // tool-scoped triggers (`on_tool_use`, `on_tool_error`): it filters the hook
 // by the LLM-emitted tool name (or the publishing resource's labels), using
-// the same selector shape as guardrails. A hook without `appliesTo` always
-// matches (back-compat). Ignored for `on_start` / `on_completion` (no tool
-// context).
+// the same selector shape as guardrails. A hook without `appliesTo` matches
+// every tool. Ignored for `on_start` / `on_completion` (no tool context).
 const HookAppliesToSchema = GuardrailAppliesToSchema.optional()
 
 export const TooluseHookSchema = z

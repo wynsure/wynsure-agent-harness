@@ -9,7 +9,7 @@ import { Leaf, defaultLeafFactory, type Cell, type LeafFactory } from "./leaf.ts
  * with the root context. Hierarchy is purely lexical (no stored parent link):
  * a sub-leaf lives at `${self_path}/${sub}`, and listing is a one-level prefix
  * match. The reserved path `/.session` hosts session-scoped state so it never
- * collides with a context id (ids are opaque). See docs/state-tree.spec.md.
+ * collides with a context id (ids are opaque). See docs/architecture.spec.md.
  */
 export class Tree {
    private readonly leaves = new Map<string, Leaf<Cell>>()

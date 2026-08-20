@@ -1,22 +1,24 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { z } from "zod"
-import {
-   type Blueprint,
-   type ResourceObject,
-   type ToolGuide,
-   type ToolName,
-   type GuardrailDecl,
-   type HookEntry,
-   type HookTrigger,
-} from "../../blueprint/blueprint.ts"
+import type {
+   ResourceObject,
+} from "../../runtime/resource.ts"
+import type {
+   ToolGuide,
+   ToolName,
+} from "../../runtime/tool.ts"
+import type {
+   GuardrailDecl,
+   HookEntry,
+   HookTrigger,
+} from "../../blueprint/blueprint-schema.ts"
 import {
    type ObjectManifest,
    type ObjectMeta,
-   type ObjectLoadContext,
-   scheme,
    ObjectMetaSchema,
 } from "../../blueprint/object-meta.ts"
+import { type ObjectLoadContext, scheme } from "../../runtime/scheme.ts"
 import type { AgentContext } from "../../runtime/context.ts"
 import type { ActivityId } from "../../state/activity.ts"
 import { AGENT_API_VERSION } from "../../blueprint/api-version.ts"
@@ -143,12 +145,12 @@ export class McpStdioObject implements ResourceObject {
       manifest: McpStdioManifest,
       ctx: ObjectLoadContext,
    ): Promise<McpStdioObject> {
-      const obj = new McpStdioObject(manifest.metadata, manifest.spec, ctx.cwd)
-      // Eagerly connect at load time (preserves existing behavior): the tool
-      // surface is part of the blueprint's collectible tools and must be ready
-      // before the first completion call.
-      await obj["ensureConnected"]()
-      return obj
+       const obj = new McpStdioObject(manifest.metadata, manifest.spec, ctx.cwd)
+       // Eagerly connect at session instantiation: the tool surface must be
+       // ready before the first completion call, and a daemon that does not
+       // answer fails the session creation (fail-fast), not a tool call.
+       await obj["ensureConnected"]()
+       return obj
    }
 
     async applyTool(
@@ -217,7 +219,7 @@ spec:
   args: ["-y", "@example/recipe-mcp-server"]
   cwd: .`,
       notes: [
-         "Connexion Ã©tablie au load (fail-fast si le daemon ne rÃ©pond pas).",
+          "Connexion établie à l'instanciation de session (fail-fast si le daemon ne répond pas).",
          "Tools publiÃ©s prÃ©fixÃ©s : `<name>__<tool>`.",
       ],
       fieldDocs: {

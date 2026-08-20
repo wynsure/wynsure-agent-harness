@@ -2,22 +2,24 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { resolve } from "path"
 import { pathToFileURL } from "node:url"
 import { z } from "zod"
-import {
-    type Blueprint,
-    type ResourceObject,
-    type ToolGuide,
-    type ToolName,
-    type GuardrailDecl,
-    type HookEntry,
-    type HookTrigger,
-} from "../../blueprint/blueprint.ts"
+import type {
+    ResourceObject,
+} from "../../runtime/resource.ts"
+import type {
+    ToolGuide,
+    ToolName,
+} from "../../runtime/tool.ts"
+import type {
+    GuardrailDecl,
+    HookEntry,
+    HookTrigger,
+} from "../../blueprint/blueprint-schema.ts"
 import {
     type ObjectManifest,
     type ObjectMeta,
-    type ObjectLoadContext,
-    scheme,
     ObjectMetaSchema,
 } from "../../blueprint/object-meta.ts"
+import { type ObjectLoadContext, scheme } from "../../runtime/scheme.ts"
 import type { AgentContext } from "../../runtime/context.ts"
 import type { ActivityId } from "../../state/activity.ts"
 import { AGENT_API_VERSION } from "../../blueprint/api-version.ts"
@@ -175,9 +177,10 @@ export class McpDenoWorkerObject implements ResourceObject {
             )
         }
         const obj = new McpDenoWorkerObject(manifest.metadata, manifest.spec, ctx.cwd)
-        // Eagerly connect at load time — same contract as McpStdio. A missing
-        // entrypoint, a bad specifier, or a missing handshake surfaces here
-        // (pointing at this resource), not later when a tool call first runs.
+        // Eagerly connect at session instantiation — same contract as
+        // McpStdio. A missing entrypoint, a bad specifier, or a missing
+        // handshake surfaces here (pointing at this resource), not later when
+        // a tool call first runs.
         await obj["ensureConnected"]()
         return obj
     }
@@ -254,7 +257,7 @@ scheme.register({
     factory: McpDenoWorkerObject.fromManifest,
     metadata: {
         role: "Source d'outils MCP dans un worker Deno isolé, via Worker API (canal postMessage).",
-        surface: "Permanent (connexion persistante au load) — Deno parent requis",
+        surface: "Permanent (connexion persistante, une par session) — Deno parent requis",
         example: `apiVersion: agent/v1
 kind: McpDenoWorker
 metadata:
@@ -266,7 +269,7 @@ spec:
   env: ["SMTP_HOST", "SMTP_PORT", "MAIL_FROM"]`,
         notes: [
             "Refuse de fonctionner hors d'un parent Deno : pas de fallback transport en v1.",
-            "Connexion établie au load (fail-fast si le worker ne s'annonce pas).",
+            "Connexion établie à l'instanciation de session (fail-fast si le worker ne s'annonce pas).",
             "Tools publiés préfixés : `<name>__<tool>`.",
             "Environnement worker vide par défaut ; seul `spec.env` autorise la lecture (allowlist restrictive).",
         ],

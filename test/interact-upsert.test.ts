@@ -28,7 +28,7 @@ import type { ActivityStartFragment } from "../src/state/fragment.ts"
 describe("InteractSurface — upsertable living kinds", () => {
    it("interact__plan replaces the live plan in place (stable seq, non-blocking)", async () => {
       const events: InteractionItemEvent[] = []
-      const { session } = buildSession({
+      const { session } = await buildSession({
          turns: [
             [createToolUse("u1", "interact__plan", {
                title: "Build feature",
@@ -78,7 +78,7 @@ describe("InteractSurface — upsertable living kinds", () => {
    })
 
    it("interact__announce replaces the live focus (one living item)", async () => {
-      const { session } = buildSession({
+      const { session } = await buildSession({
          turns: [
             [createToolUse("u1", "interact__announce", { action: "searching" })],
             [createToolUse("u2", "interact__announce", { action: "writing report", detail: "draft" })],

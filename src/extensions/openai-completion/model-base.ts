@@ -2,13 +2,17 @@ import OpenAI from "openai"
 import { type ZodTypeAny, toJSONSchema } from "zod"
 import type {
    ResourceObject,
+} from "../../runtime/resource.ts"
+import type {
    ToolGuide,
    ToolName,
+} from "../../runtime/tool.ts"
+import { validateToolGuides } from "../../runtime/tool.ts"
+import type {
    GuardrailDecl,
    HookEntry,
    HookTrigger,
-} from "../../blueprint/blueprint.ts"
-import { validateToolGuides } from "../../blueprint/blueprint.ts"
+} from "../../blueprint/blueprint-schema.ts"
 import type { ObjectManifest, ObjectMeta } from "../../blueprint/object-meta.ts"
 import type { ServiceContract } from "../../blueprint/service.ts"
 import {
@@ -48,7 +52,7 @@ export interface ModelStatus {
  * A model resource publishes no tools, hooks or fragments: it exists solely to
  * provide the `ThreadCompletionService` capability. The agent references it by
  * name via `spec.model`; resolution is contract-based (see
- * docs/resources.spec.md § "Contrats de service").
+ * docs/architecture.spec.md § "ServiceContract").
  *
  * Every model kind targets an OpenAI-compatible Chat Completions endpoint, so
  * the concrete engine (`OpenAIThreadCompletionService`) lives alongside the

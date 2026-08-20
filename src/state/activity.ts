@@ -1,7 +1,6 @@
 /**
  * Activity model. Every tool invocation gets an activity — a serializable cell
- * in the owning context's /activities leaf (see docs/state-tree.spec.md,
- * docs/activities.spec.md). A tool that can settle immediately delivers the
+ * in the owning context's /activities leaf (see docs/architecture.spec.md). A tool that can settle immediately delivers the
  * activity synchronously; one that cannot delegates it to an environment. Either
  * way the activity's termination is synchronous data mutation: the cell goes
  * terminal and the effects (ToolFeedback, completion, interact flip) derive

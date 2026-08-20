@@ -36,8 +36,8 @@ flowchart TB
     end
     subgraph Pkg["agent-blueprint-harness"]
         EXT["extensions/<br/>Resources pluggables<br/>(auto-enregistrement)"]
-        RT["runtime/<br/>Session, Context, boucle,<br/>thread, steering"]
-        BP["blueprint/<br/>Schémas, Scheme, ResourceObject,<br/>instruction, scripting"]
+        RT["runtime/<br/>Session, Context, ResourceObject,<br/>Scheme + loader, resources core,<br/>boucle, thread, steering"]
+        BP["blueprint/<br/>Schémas, manifests, descriptors,<br/>instruction, scripting"]
         ST["state/<br/>Tree, Leaf, Cell, Fragment"]
         SYS["system/<br/>Logger Pino"]
         EXT --> RT
@@ -77,8 +77,9 @@ Leaf<Fragment>`) se fait par factory au moment de l'acquisition.
 
 ### `blueprint/` — la couche déclarative
 
-Le **quoi** d'un agent, sans aucune exécution. Transforme un fichier YAML en
-objets typés en mémoire.
+Le **quoi** d'un agent, sans aucune exécution et sans aucune référence au
+runtime. Transforme un fichier YAML en descripteurs typés et partageables en
+mémoire.
 
 Pièces maîtresses :
 
@@ -89,40 +90,58 @@ Pièces maîtresses :
   ressources : `name` (identifiant stable), `labels` (sélectionnables),
   `annotations` (libres, non sélectionnables). Tout le reste kind-spécifique
   vit dans `spec`.
-- **Scheme** — le registre unique process-wide `(apiVersion, kind) → { schéma
-  de manifest, factory, metadata }`. Chaque module de ressource s'y enregistre
-  une fois par side-effect d'import. Il remplace deux registres parallèles
-  (validation + loader) qui devaient être synchronisés à la main.
-- **ResourceObject** — le contrat runtime que tout objet chargé implémente :
-  `getTools`, `getHooks`, `getGuardrails`, `applyTool`, `getService?`,
-  `captureState?` / `restoreState?`, `bindToSession?`, `toManifest`. Les membres
-  optionnels (`?`) sont les seams que les extensions exploitent sans que le
-  cœur les câble.
+- **ResourceDescriptor** — une entrée de blueprint : le manifest validé, plus
+  optionnellement une factory opaque de remplacement (seam de construction
+  programmatique ; seul le runtime sait l'invoquer). Le descripteur est
+  l'unité **partagée et immutable** : un blueprint chargé une fois peut servir
+  un nombre quelconque de sessions.
+- **Blueprint** — la collection ordonnée de descripteurs plus la collection
+  d'instructions. C'est l'objet qu'une session référence ; il n'expose aucune
+  opération d'exécution.
 - **ToolingSchema** — les trois entrées déclaratives qui composent la surface
   d'outils : `toolset` (sélection depuis d'autres ressources), `route`
   (transition de posture exposée comme outil), `subagent` (délégation à un
   autre agent).
-- **InstructionTemplate** — une instruction résolue (frontmatter + corps), avec
-  exigences en outils/variables. Le rendu `{{expr}}` est délégué à
-  `blueprint/scripting` (expressions JS réelles, via
+- **InstructionTemplateCollection** — les instructions résolues (frontmatter +
+  corps) avec leurs exigences en outils/variables ; les lectures fichier sont
+  mises en cache par ref, donc partagées entre sessions. Le rendu `{{expr}}`
+  est délégué à `blueprint/scripting` (expressions JS réelles, via
   `@jointhedots/scripting`).
 - **ServiceContract** — une clé de capacité typée. Une ressource qui implémente
   une capacité (ex. la complétion de thread) la publie via `getService(contract)`;
   un consommateur la résout par contrat, sans couplage au kind concret.
 
-Le seam **Manifest ↔ Object** est exactement bidirectionnel : `fromManifest`
-construit l'objet live (spec figée), `toManifest` le resérialise. La composition
-par `extends` produit un **nouvel** objet plutôt que de muter l'existant —
-d'où la round-trippabilité : sérialiser un objet reflète toujours ce qui a été
-réellement chargé.
-
 ### `runtime/` — la couche live
 
-Le **comment l'agent tourne**, à un instant t. Trois responsabilités :
+Le **comment l'agent tourne**, à un instant t. Tout ce qui est mutable ou
+connecté vit ici — objets vivants, registre des kinds, boucle, thread :
 
-- **AgentSession** — la surface host. Possède l'EventEmitter, l'identité de
-  session, le registre des **environnements** (accepteurs d'activités externes),
-  et le registre des contextes. Alloue les ids. Route la résolution d'activité
+- **ResourceObject** (`runtime/resource.ts`) — le contrat que tout objet
+  instancié implémente : `getTools`, `getHooks`, `getGuardrails`, `applyTool`,
+  `getService?`, `captureState?` / `restoreState?`, `bindToSession?`,
+  `toManifest`. Les membres optionnels (`?`) sont les seams que les extensions
+  exploitent sans que le cœur les câble. Un objet qui a besoin de ses pairs ou
+  des déclarations partagées les atteint à travers **sa session** ; la session
+  pointe le blueprint — les objets ne pointent jamais le blueprint directement.
+- **Scheme** (`runtime/scheme.ts`) — le registre unique process-wide
+  `(apiVersion, kind) → { schéma de manifest, factory, metadata }`. Chaque
+  module de ressource (core ou extension) s'y enregistre une fois par
+  side-effect d'import. La factory reçoit un contexte de load réduit à la
+  session en construction (`{ cwd, session }`).
+- **Loader** (`runtime/loader.ts`) — `loadAgentBlueprintFrom` /
+  `createBlueprintFrom` : parse le YAML, valide chaque manifest contre le
+  schéma de son kind, enregistre les descripteurs. Synchrone, sans effet de
+  bord, aucune connexion.
+- **Resources core** (`runtime/resources/`) — les kinds `Agent`, `Posture`,
+  `Skill`, `Preset` : objets vivants par session, résolution de tooling
+  partagée (`tooling.ts`), fusion `extends`.
+- **AgentSession** — la surface host. Porte **les ressources vivantes de sa
+  session** (`session.resources`, instanciées par `AgentSession.create` : les
+  factories connectent en échec-rapide, la résolution `extends` s'exécute,
+  puis chaque ressource reçoit `bindToSession`) et les résout
+  (`getResource`/`getService`). Possède l'EventEmitter, l'identité de session,
+  le registre des **environnements** (accepteurs d'activités externes), et le
+  registre des contextes. Alloue les ids. Route la résolution d'activité
   (host-driven) vers le contexte propriétaire. C'est aussi la façade du Tree
   pour la portée session (`/.session/state`).
 - **AgentContext** — la boucle de run d'un agent. Construit la surface d'outils,
@@ -135,6 +154,12 @@ Le **comment l'agent tourne**, à un instant t. Trois responsabilités :
   fournisseur (assistant vs contexte/audit).
 - **AgentThread** — une `Leaf<Fragment>` spécialisée, à `${contextPath}/thread` :
   la mémoire ordonnée des fragments produits par l'agent.
+
+Le seam **Manifest ↔ Object** est exactement bidirectionnel : `fromManifest`
+construit l'objet live (spec figée) pour **une session**, `toManifest` le
+resérialise. La composition par `extends` produit un **nouvel** objet plutôt
+que de muter l'existant — d'où la round-trippabilité : sérialiser un objet
+reflète toujours ce qui a été réellement instancié.
 
 L'exécution d'un tool call est soit **directe** (la ressource livre un résultat,
 enveloppé en feedback synchrone), soit **déléguée** (la ressource décrit une
@@ -177,13 +202,16 @@ runtime valide, simplement sans surface utilisateur.
 
 ## Le cycle Manifest → Object
 
-Toute ressource issue d'un blueprint passe par un chemin unique :
+Toute ressource issue d'un blueprint passe par deux phases distinctes, dont la
+frontière est le partage : le **load** produit des descripteurs partageables,
+la **création de session** instancie les objets vivants.
 
 ```mermaid
 sequenceDiagram
     participant H as Host
-    participant L as Loader (blueprint.ts)
+    participant L as Loader (runtime/loader.ts)
     participant S as Scheme
+    participant A as AgentSession.create
     participant R as ResourceObject
     H->>L: loadAgentBlueprintFrom(path)
     L->>L: parse YAML multi-docs
@@ -192,18 +220,39 @@ sequenceDiagram
         S->>S: envelope TypeMeta + ObjectMeta
         S->>S: schéma kind-spécifique (Zod)
         S->>L: manifest validé
-        L->>R: factory.fromManifest(manifest, ctx)
-        R-->>L: objet live (spec figée)
     end
-    L->>L: resolveExtends (2e passe)
-    L-->>H: Blueprint (resources[])
+    L-->>H: Blueprint (descriptors[] + instructions)
+    Note over H,R: la phase ci-dessous se rejoue pour CHAQUE session
+    H->>A: AgentSession.create(blueprint)
+    A->>A: new AgentSession(blueprint) — shell sans contexte
+    loop chaque descripteur
+        A->>R: factory.fromManifest(manifest, { cwd, session })
+        R-->>A: objet live rangé dans session.resources
+    end
+    A->>A: resolveExtends (2e passe)
+    A->>A: résoudre l'agent, créer le contexte racine
+    A->>R: bindToSession?(session)
+    A-->>H: session prête à exécuter
 ```
 
-Deux passes : d'abord la construction de chaque objet (factory kind-spécifique),
-puis la **résolution des `extends`** — chaque agent/posture/skill qui déclare
-`spec.extends: [...]` est reconstruit avec ses presets fusionnés. La deuxième
-passe existe pour que l'ordre de déclaration des presets soit indifférent.
-L'objet fusionné **remplace** l'original dans la liste des resources.
+Phase de load : validation de chaque manifest (envelope + schéma kind), aucun
+objet n'est construit, aucune connexion n'est établie. Le blueprint est
+synchrone, sans effet de bord, et sert de source partagée pour toutes les
+sessions qui suivent.
+
+Phase d'instanciation (par session) : la session existe **avant** ses
+ressources — les factories la reçoivent comme contexte de load et la stockent
+comme back-reference (rien ne lit l'identité ou les contextes à ce stade).
+Chaque descripteur passe par sa factory kind-spécifique — les ressources
+connectées (MCP) s'y établissent en échec-rapide, donc un endpoint cassé fait
+échouer la création de session, pas un premier tool call. Puis la **résolution
+des `extends`** reconstruit chaque agent/posture/skill qui déclare
+`spec.extends: [...]` avec ses presets fusionnés ; cette seconde passe existe
+pour que l'ordre de déclaration des presets soit indifférent, et l'objet
+fusionné **remplace** l'original dans les ressources de la session. L'agent
+résolu détermine l'identité (`agentName`/`sessionId`) et le contexte racine est
+construit. Enfin chaque ressource reçoit `bindToSession` — le seam
+d'abonnement aux événements de la session vivante.
 
 ## Les kinds, groupés par rôle
 
@@ -213,7 +262,7 @@ Tous les kinds vivent sous `agent/v1`. Quatre rôles suffisent pour les retenir.
 |---|---|---|
 | **Agent et ses états** | `Agent`, `Posture`, `Skill`, `Preset` | Le comportement. `Agent` est la persona racine ; `Posture` est un état actif ; `Skill` est un bundle toggleable ; `Preset` est un conteneur de config partagée, inerte tant que rien ne l'`extends`. |
 | **Le cerveau** | `OpenAIModel`, `OllamaModel`, `AzureFoundryModel` | Fournisseurs purs du `ThreadCompletionService`. Pas d'outils, pas de surface. |
-| **Sources d'outils** | `McpStdio`, `McpServer`, `McpDenoWorker`, `Memory` | Chacun publie un set d'outils appelables. Ne contribuent à la surface que si un `toolset` les sélectionne. |
+| **Sources d'outils** | `McpStdio`, `McpDirect`, `McpServer`, `McpDenoWorker`, `Memory` | Chacun publie un set d'outils appelables. Ne contribuent à la surface que si un `toolset` les sélectionne. |
 | **Surface utilisateur** | `InteractSurface` | Publie `interact__*` et possède la projection conversation. |
 
 Deux invariants structurels :
@@ -337,7 +386,7 @@ les handles transitoires (clients MCP, caches de modèle) se reconnectent
 paresseusement.
 
 ```mermaid
-sequenceDiagram
+    sequenceDiagram
     participant H as Host
     participant S as AgentSession
     participant T as Tree
@@ -348,7 +397,7 @@ sequenceDiagram
     S-->>H: SessionSnapshot { sessionId, agentName, tree }
     Note over H,R: restore
     H->>S: AgentSession.restore(snapshot, blueprint)
-    S->>S: new AgentSession (re-instantie les resources)
+    S->>S: AgentSession.create (instancie les resources de la session)
     S->>T: tree.restore(snapshot.tree)
     loop chaque resource
         S->>R: restoreState?(cell, scope) — no-op Pattern A
@@ -391,8 +440,11 @@ publier).
 Le lien entre cette spec (FR) et le code (EN) se fait par les noms de concepts,
 qui ne divergent jamais entre les deux :
 
-- **Blueprint** → `Blueprint`, **Resource** → `ResourceObject`, **Manifest** →
-  `ObjectManifest`.
+- **Blueprint** → `Blueprint`, **Descripteur** → `ResourceDescriptor`,
+  **Resource** → `ResourceObject`, **Manifest** → `ObjectManifest`. Les
+  ressources vivantes d'une session vivent sur `session.resources` — il n'y a
+  pas d'objet intermédiaire entre la session et ses ressources, ni entre la
+  session et le blueprint.
 - **Tree / Leaf / Cell** → mêmes noms en code.
 - **Session** → `AgentSession`, **Context** → `AgentContext`, **Thread** →
   `AgentThread`.

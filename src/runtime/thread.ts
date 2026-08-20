@@ -1,8 +1,8 @@
-import type { ToolGuide } from "../blueprint/blueprint.ts"
 import type { Fragment, FragmentOfKind, FragmentKind } from "../state/fragment.ts"
 import { Leaf } from "../state/leaf.ts"
 import type { Tree } from "../state/tree.ts"
 import { defineService, type ServiceContract } from "../blueprint/service.ts"
+import type { ToolGuide } from "./tool.ts"
 
 export interface TokenUsage {
    inputTokens: number
@@ -27,8 +27,8 @@ export interface IThreadCompletionService {
 
 /**
  * The single capability a `model` resource provides in v1. Resolved by name
- * from the agent's `spec.model` at context creation (see docs/resources.spec.md
- * § "model — service de complétion").
+ * from the agent's `spec.model` at context creation (see
+ * docs/architecture.spec.md § "ServiceContract").
  */
 export const ThreadCompletionService: ServiceContract<IThreadCompletionService> =
    defineService<IThreadCompletionService>("thread-completion")

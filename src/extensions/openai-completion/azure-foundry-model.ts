@@ -1,11 +1,7 @@
 import { z } from "zod"
 import { DefaultAzureCredential } from "@azure/identity"
-import {
-   type ObjectLoadContext,
-   type ObjectMeta,
-   scheme,
-   ObjectMetaSchema,
-} from "../../blueprint/object-meta.ts"
+import { type ObjectMeta, ObjectMetaSchema } from "../../blueprint/object-meta.ts"
+import { type ObjectLoadContext, scheme } from "../../runtime/scheme.ts"
 import { type IThreadCompletionService } from "../../runtime/thread.ts"
 import { BaseModelObject, env, OpenAIThreadCompletionService } from "./model-base.ts"
 import { AGENT_API_VERSION } from "../../blueprint/api-version.ts"
@@ -48,8 +44,8 @@ const AZURE_AI_SCOPE = "https://ai.azure.com/.default"
  * Resolve the bearer credential an AzureFoundryModel authenticates with. For
  * `entraId`, acquires a token through `@azure/identity`'s
  * `DefaultAzureCredential` (managed identity, env service principal, CLI, …).
- * The token is acquired once at load; long-lived sessions needing token
- * refresh should re-resolve — deferred for v1.
+ * The token is acquired once at session instantiation; long-lived sessions
+ * needing token refresh should re-resolve — deferred for v1.
  */
 async function resolveAzureCredential(spec: AzureFoundryModelSpec): Promise<string> {
    if (spec.auth === "entraId") {
