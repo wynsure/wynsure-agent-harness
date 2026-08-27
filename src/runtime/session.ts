@@ -90,8 +90,8 @@ export class AgentSession {
     private idCounter = 0
     private readonly contexts = new Map<string, AgentContext>()
     private readonly environments = new Map<EnvironmentName, ActivityEnvironment>()
-   // Assigned by `create` once the resources exist and the agent is resolved:
-   // factories run before the agent is known, and none of them reads these.
+   // Assigned by `create` before resource factories run so session-scoped
+   // resources can bind access checks to the final identity.
    private _agentName!: string
    private _sessionId!: SessionId
    private _context!: AgentContext
@@ -147,6 +147,9 @@ export class AgentSession {
        agentName?: string,
     ): Promise<AgentSession> {
        const session = new AgentSession(blueprint)
+       const name = agentName ?? pickDefaultAgentDescriptor(blueprint)
+       session._agentName = name
+       session._sessionId = `${name}-${timecode()}`
        const ctx: ObjectLoadContext = {
           cwd: blueprint.instructions.cwd,
           session,
@@ -165,7 +168,6 @@ export class AgentSession {
       }
       resolveExtends(session.resources)
 
-      const name = agentName ?? pickDefaultAgent(session.resources)
       const res = session.getResource(name)
       if (!res) {
          throw new Error(`Agent resource not found: "${name}".`)
@@ -173,8 +175,6 @@ export class AgentSession {
       if (!(res instanceof AgentObject)) {
          throw new Error(`Resource "${name}" is not an agent.`)
       }
-      session._agentName = name
-      session._sessionId = `${name}-${timecode()}`
       session._context = new AgentContext(session, { agent: res })
       for (const resource of session.resources) {
          resource.bindToSession?.(session)
@@ -412,4 +412,23 @@ function pickDefaultAgent(resources: ResourceObject[]): string {
       )
    }
    return agents[0].name
+}
+
+function pickDefaultAgentDescriptor(blueprint: Blueprint): string {
+   const agents = blueprint.descriptors.filter(
+      (descriptor) => descriptor.manifest.kind === "Agent",
+   )
+   if (agents.length === 0) {
+      throw new Error(
+         "No agent resource in blueprint. Pass an agent name to AgentSession.",
+      )
+   }
+   if (agents.length > 1) {
+      throw new Error(
+         `Multiple agent resources (${agents
+            .map((descriptor) => descriptor.manifest.metadata.name)
+            .join(", ")}); pass an explicit agent name to AgentSession.`,
+      )
+   }
+   return agents[0].manifest.metadata.name
 }

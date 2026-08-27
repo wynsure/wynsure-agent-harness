@@ -216,13 +216,36 @@ function fragmentsToMessages(
 
          case "ToolFeedback": {
             const result = frag.result
+            const images = Array.isArray(result)
+               ? result.filter(
+                    (item: any) =>
+                       item?.type === "image" &&
+                       typeof item.data === "string" &&
+                       typeof item.mimeType === "string",
+                 )
+               : []
             const content =
-               typeof result === "string" ? result : JSON.stringify(result)
+               images.length > 0
+                  ? `${images.length} image(s) chargée(s) pour le modèle.`
+                  : typeof result === "string"
+                    ? result
+                    : JSON.stringify(result)
             const toolMsg = {
                role: "tool" as const,
                tool_call_id: frag.toolUseId,
                content,
             }
+            const imageMessages = images.map((image: any) => ({
+               role: "user" as const,
+               content: [
+                  {
+                     type: "image_url" as const,
+                     image_url: {
+                        url: `data:${image.mimeType};base64,${image.data}`,
+                     },
+                  },
+               ],
+            }))
 
             let insertIdx = -1
             for (let i = messages.length - 1; i >= 0; i--) {
@@ -244,9 +267,9 @@ function fragmentsToMessages(
                ) {
                   insertIdx++
                }
-               messages.splice(insertIdx, 0, toolMsg)
+               messages.splice(insertIdx, 0, toolMsg, ...imageMessages)
             } else {
-               messages.push(toolMsg)
+               messages.push(toolMsg, ...imageMessages)
             }
             break
          }

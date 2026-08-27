@@ -67,6 +67,10 @@ interface InProcessMcpServer {
    close(): Promise<void>
 }
 
+interface McpDirectFactoryContext {
+   readonly sessionId: string
+}
+
 function isMcpServerLike(candidate: unknown): candidate is InProcessMcpServer {
    return (
       !!candidate &&
@@ -103,12 +107,19 @@ export class McpDirectObject implements ResourceObject {
    private transport: InMemoryTransport | null = null
    private toolsCache: ToolGuide[] = []
    private readonly cwd: string
+   private readonly factoryContext: McpDirectFactoryContext
 
-   constructor(metadata: ObjectMeta, spec: McpDirectSpec, fallbackCwd: string) {
+   constructor(
+      metadata: ObjectMeta,
+      spec: McpDirectSpec,
+      fallbackCwd: string,
+      factoryContext: McpDirectFactoryContext,
+   ) {
       this.metadata = metadata
       this.name = metadata.name
       this.spec = spec
       this.cwd = fallbackCwd
+      this.factoryContext = factoryContext
    }
 
    get entry(): string {
@@ -142,7 +153,7 @@ export class McpDirectObject implements ResourceObject {
       // ESM module cache is per-process, so a factory is the only way two
       // McpDirect resources (or a reload) can each get a fresh, unconnected
       // instance from the same entry.
-      const server = typeof exported === "function" ? await exported() : exported
+      const server = typeof exported === "function" ? await exported(this.factoryContext) : exported
       if (!isMcpServerLike(server)) {
          throw new Error(
             `McpDirect "${this.name}": export "${exportName}" of "${this.spec.entry}" is not an MCP server instance` +
@@ -217,7 +228,12 @@ export class McpDirectObject implements ResourceObject {
       manifest: McpDirectManifest,
       ctx: ObjectLoadContext,
    ): Promise<McpDirectObject> {
-      const obj = new McpDirectObject(manifest.metadata, manifest.spec, ctx.cwd)
+      const factoryContext: McpDirectFactoryContext = {
+         get sessionId() {
+            return ctx.session.sessionId
+         },
+      }
+      const obj = new McpDirectObject(manifest.metadata, manifest.spec, ctx.cwd, factoryContext)
        // Eagerly link at session instantiation — same contract as McpStdio: a
        // missing entry, a bad export, or a broken module surfaces here
        // (pointing at this resource), not later when a tool call first runs.
