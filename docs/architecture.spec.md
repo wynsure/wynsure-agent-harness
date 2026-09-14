@@ -1,16 +1,16 @@
-# Spécification d'architecture — `agent-blueprint-harness`
+# Spécification d'architecture — `agent-harness`
 
 > Runtime déclaratif pour agents LLM. Ce document décrit l'architecture du
-> package `@kanop.ai/agent-blueprint-harness` : ses frontières, ses couches,
+> package `@wynsure/agent-harness` : ses frontières, ses couches,
 > ses invariants et ses flux. Il complète [`concepts.md`](./concepts.md) (le
 > modèle mental) en fixant la structure interne du code.
 
 ## Frontières du package
 
-Le package est le **moteur d'agent** publié sous le scope `@kanop.ai/`. Il est
+Le package est le **moteur d'agent** publié sous le scope `@wynsure/`. Il est
 consommé par deux hôtes distincts, qu'il ne connaît pas :
 
-- **`@kanop.ai/agent-blueprint-cli`** (repo séparé) — interface en ligne de
+- **`@wynsure/agent-blueprint-cli`** (repo séparé) — interface en ligne de
   commande : validation, introspection, lancement du studio.
 - **tout host embarqué** (serveur HTTP, batch, TUI) qui construit un `Blueprint`
   et pilote un `AgentSession` via `execute()` + événements.
@@ -19,7 +19,7 @@ L'invariant de dépendance est strict : **le harness n'importe jamais le CLI ni
 aucun host**. Le sens est `host → harness`. Le harness expose sa surface publique
 via un unique barrel `src/index.ts`.
 
-C'est un **fork** du projet kanop.ai (commit `98b210a`), destiné au projet
+C'est un **fork** du runtime d'origine (commit `98b210a`), destiné au projet
 agent wynsure. Le versionning est indépendant (`0.1.x`).
 
 ## Les quatre couches

@@ -1,5 +1,5 @@
 {
-  "name": "@kanop.ai/agent-blueprint-harness",
+  "name": "@wynsure/agent-harness",
   "version": "0.1.8",
   "description": "Runtime agent harness: blueprints, sessions, fragments, activities",
   "author": "Mphasis Wyde",
@@ -32,7 +32,7 @@
     "prepack": "npm run build && node scripts/strip-dev-exports.mjs",
     "postpack": "node scripts/restore-dev-exports.mjs",
     "version:bump": "npm version patch --no-git-tag-version",
-    "release": "npm run version:bump && npm publish --access public",
+    "release": "npm run version:bump && npm publish --access restricted",
     "pack": "npm run version:bump && npm pack"
   },
   "dependencies": {

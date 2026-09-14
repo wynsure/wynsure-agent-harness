@@ -1,4 +1,4 @@
-# @kanop.ai/agent-harness
+# @wynsure/agent-harness
 
 A declarative runtime for LLM agents. Describe an agent — its model, persona,
 states, tools and safety rules — in a single YAML **blueprint**, and the
@@ -7,12 +7,12 @@ HTTP server or a batch job without changing the file.
 
 This package holds the runtime (blueprint loading, sessions, fragments,
 activities). The companion CLI lives in
-[`@kanop.ai/agent-blueprint-cli`](../agent-blueprint-cli).
+[`@wynsure/agent-blueprint-cli`](../agent-blueprint-cli).
 
 ## Install
 
 ```bash
-npm install @kanop.ai/agent-harness @kanop.ai/agent-blueprint-cli
+npm install @wynsure/agent-harness @wynsure/agent-blueprint-cli
 ```
 
 The agent's "brain" is resolved from environment variables, so drop a `.env`
