@@ -2,6 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js"
 import { resolve } from "path"
+import { createRequire } from "node:module"
 import { pathToFileURL } from "node:url"
 import { z } from "zod"
 import type {
@@ -83,16 +84,26 @@ function isMcpServerLike(candidate: unknown): candidate is InProcessMcpServer {
 /**
  * Resolve `spec.entry` into a dynamic-import specifier. Filesystem paths
  * (relative or absolute) are anchored on the load cwd and turned into `file:`
- * URLs — Node's ESM loader rejects bare Windows paths. Anything else
- * (`file:`/`http(s):` URLs, bare package specifiers) is forwarded verbatim so
- * Node resolution applies.
+ * URLs — Node's ESM loader rejects bare Windows paths. Bare package specifiers
+ * are resolved from the blueprint directory, not from this module: an agent
+ * package installed beside its blueprint (portal agent cache, standalone
+ * deployment) is not reachable from the harness's own `node_modules` chain.
+ * Only when that fails is the specifier forwarded verbatim, so the host's
+ * default resolution still applies.
  */
 function resolveEntrySpecifier(entry: string, fallbackCwd: string): string {
-   const isUrl = /^(file:|https?:)/.test(entry)
+   if (/^(file:|https?:)/.test(entry)) return entry
    const isAbsoluteFsPath =
       entry.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(entry)
-   if (isUrl || (!entry.startsWith(".") && !isAbsoluteFsPath)) return entry
-   return pathToFileURL(resolve(fallbackCwd, entry)).href
+   if (entry.startsWith(".") || isAbsoluteFsPath) {
+      return pathToFileURL(resolve(fallbackCwd, entry)).href
+   }
+   try {
+      const requireFrom = createRequire(resolve(fallbackCwd, "__blueprint__.js"))
+      return pathToFileURL(requireFrom.resolve(entry)).href
+   } catch {
+      return entry
+   }
 }
 
 export class McpDirectObject implements ResourceObject {
@@ -325,7 +336,7 @@ spec:
          "Tools publiés préfixés : `<name>__<tool>`.",
       ],
       fieldDocs: {
-         "spec.entry": "Point d'entrée du module serveur : chemin (relatif au cwd du blueprint ou absolu), URL `file:`/`http(s):`, ou specifier de package.",
+         "spec.entry": "Point d'entrée du module serveur : chemin (relatif au cwd du blueprint ou absolu), URL `file:`/`http(s):`, ou specifier de package — résolu depuis le dossier du blueprint (le package d'agents est installé à côté), avec repli sur la résolution de l'hôte.",
          "spec.export": "Nom de l'export portant le serveur ou sa factory (défaut : `default`).",
       },
    },
