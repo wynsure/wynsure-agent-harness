@@ -1,6 +1,6 @@
 {
   "name": "@wynsure/agent-harness",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Runtime agent harness: blueprints, sessions, fragments, activities",
   "author": "Mphasis Wyde",
   "license": "SEE LICENSE IN license.txt",
